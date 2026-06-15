@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "betlas"
+version = "1.0.0"
+description = "Geometry-topology grammar and benchmarks for beta-structure fold classes."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Shuyu Zhong" }]
+keywords = [
+  "bioinformatics",
+  "protein-structure",
+  "beta-structure",
+  "fold-classification",
+  "geometry",
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "numpy>=1.23",
+  "pandas>=1.5",
+  "scipy>=1.10",
+  "biopython>=1.81",
+  "scikit-learn>=1.2",
+  "joblib>=1.2",
+  "tqdm>=4.0",
+  "hydra-core>=1.3",
+  "opencv-python-headless>=4.8",
+]
+
+[project.optional-dependencies]
+ml = [
+  "xgboost>=2.0",
+]
+gbdt = [
+  "catboost>=1.2",
+  "lightgbm>=4.0",
+]
+external = [
+  "anndata>=0.12",
+  "h5py>=3.10",
+  "matplotlib>=3.7",
+  "networkx>=3.0",
+]
+all = [
+  "xgboost>=2.0",
+  "catboost>=1.2",
+  "lightgbm>=4.0",
+  "anndata>=0.12",
+  "h5py>=3.10",
+  "matplotlib>=3.7",
+  "networkx>=3.0",
+]
+dev = [
+  "pytest>=7.0",
+  "ruff>=0.5",
+  "build>=1.2",
+]
+
+[project.scripts]
+betlas = "betlas.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["betlas*"]
+
+[tool.setuptools.package-data]
+"betlas.readouts.beta_barrel_detection" = ["conf/**/*.yaml"]
+"betlas.readouts.beta_barrel_staves" = ["conf/**/*.yaml"]
+"betlas.readouts.topology_diagnostics" = ["conf/**/*.yaml"]
+"betlas.ml" = ["conf/**/*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "src"]

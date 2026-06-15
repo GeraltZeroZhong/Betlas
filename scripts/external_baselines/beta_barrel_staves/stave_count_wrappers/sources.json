@@ -1,0 +1,157 @@
+[
+  {
+    "method": "Diederichs NN",
+    "year": 1998,
+    "status": "not_integrated",
+    "reason": "Paper-only method in the searches performed here; no author code or runnable original package was found."
+  },
+  {
+    "method": "Jacoboni NN+DP",
+    "year": 2001,
+    "status": "not_integrated",
+    "reason": "Paper-only method in the searches performed here; no author code or runnable original package was found."
+  },
+  {
+    "method": "HMM-B2TMR",
+    "year": 2002,
+    "status": "not_integrated",
+    "reason": "No verified standalone implementation page was found. The table notes software names in reviews, but no reproducible original code package."
+  },
+  {
+    "method": "BETA-TM",
+    "year": 2003,
+    "status": "not_integrated",
+    "reason": "No original code, binary, or maintained server package was found."
+  },
+  {
+    "method": "PRED-TMBB",
+    "year": 2004,
+    "status": "not_integrated",
+    "reason": "The original method is exposed as a web server, but no downloadable original implementation suitable for local reproducibility was found."
+  },
+  {
+    "method": "TBBpred",
+    "year": 2004,
+    "status": "not_integrated",
+    "reason": "Historical web server/tool-index entry only; no author code package was found."
+  },
+  {
+    "method": "PROFtmb",
+    "year": "2004/2006",
+    "status": "integrated",
+    "source": "https://packages.debian.org/bullseye/proftmb",
+    "version": "proftmb 1.1.12-11 Debian/Ubuntu package, tested from proftmb_1.1.12-11_amd64.deb",
+    "wrapper": "scripts/run_proftmb.sh",
+    "reason": "Original PROFtmb software is packaged for Debian/Ubuntu and includes program data and examples."
+  },
+  {
+    "method": "TMBETA-NET",
+    "year": 2005,
+    "status": "not_integrated",
+    "reason": "Historical web-server method; no original standalone source or binary was found."
+  },
+  {
+    "method": "Consensus predictor",
+    "year": 2005,
+    "status": "not_integrated",
+    "reason": "Combination workflow described in paper; no independent original software package was found."
+  },
+  {
+    "method": "transFold",
+    "year": 2006,
+    "status": "not_integrated",
+    "reason": "Historical web-server method; no original standalone source or binary was found."
+  },
+  {
+    "method": "TMBpro",
+    "year": 2008,
+    "status": "not_integrated",
+    "reason": "Suite/server references were found, but no verifiable original local package for this exact baseline was found."
+  },
+  {
+    "method": "TMBETAPRED-RBF",
+    "year": 2009,
+    "status": "not_integrated",
+    "reason": "Historical web-server method; no original standalone source or binary was found."
+  },
+  {
+    "method": "TMBHMM",
+    "year": 2011,
+    "status": "not_integrated",
+    "reason": "No verified downloadable original implementation was found."
+  },
+  {
+    "method": "BOCTOPUS",
+    "year": 2012,
+    "status": "not_integrated",
+    "source": "https://boctopus.cbr.su.se/boctopus/",
+    "reason": "The BOCTOPUS web server is live, but no original local code package was found for the 2012 BOCTOPUS baseline. BOCTOPUS2 has a separate source/download path and is not the same table row."
+  },
+  {
+    "method": "BETAWARE",
+    "year": 2013,
+    "status": "integrated",
+    "source": "https://github.com/BolognaBiocomp/betaware",
+    "source_ref": "c2797d595798c2febd30bacbde73222a01c4119b",
+    "wrapper": "scripts/run_betaware.sh",
+    "reason": "Official Python source and examples are publicly available."
+  },
+  {
+    "method": "Pred-beta-TM",
+    "year": 2015,
+    "status": "not_integrated",
+    "reason": "Web-server method; no original standalone source or binary was found."
+  },
+  {
+    "method": "PRED-TMBB2",
+    "year": 2016,
+    "status": "integrated",
+    "source": "https://github.com/pbagos/juchmme/releases/tag/1.0.6",
+    "version": "JUCHMME release 1.0.6 zip artifact",
+    "wrapper": "scripts/run_juchmme_pred_tmbb2.sh",
+    "reason": "JUCHMME release includes precompiled Java classes plus PRED-TMBB2 model/config/tables."
+  },
+  {
+    "method": "BetAware-Deep",
+    "year": 2021,
+    "status": "not_integrated",
+    "source": "https://busca.biocomp.unibo.it/betaware2",
+    "reason": "Public interface is a web server; no author local code package was found."
+  },
+  {
+    "method": "PRED-TMBB2+HNN",
+    "year": 2021,
+    "status": "integrated",
+    "source": "https://github.com/pbagos/juchmme",
+    "version": "JUCHMME release 1.0.6 HNN configuration and W_PREDTMBB2_MYMODEL weights",
+    "wrapper": "scripts/run_juchmme_pred_tmbb2.sh",
+    "reason": "JUCHMME includes HNN support, `conf.tmbbHNN`, and the `W_PREDTMBB2_MYMODEL` weights."
+  },
+  {
+    "method": "TMbed",
+    "year": 2022,
+    "status": "integrated",
+    "source": "https://github.com/BernhoferM/TMbed",
+    "source_ref": "8cee893523eb655bc9485c00c65336d27a236191",
+    "runtime_pins": "transformers==4.51.3, CPU PyTorch from conda-forge",
+    "wrapper": "scripts/run_tmbed.sh",
+    "reason": "Official source, model weights, examples, and precomputed smoke-test embeddings are public."
+  },
+  {
+    "method": "DeepTMHMM",
+    "year": 2022,
+    "status": "not_integrated",
+    "source": "https://services.healthtech.dtu.dk/services/DeepTMHMM/",
+    "reason": "Official use is via DTU/BioLib service. Standalone local copies appear to require BioLib/licensing or Docker, and Docker is not available in this workspace."
+  },
+  {
+    "method": "PolarBearal3",
+    "year": 2026,
+    "status": "integrated",
+    "source": "https://github.com/SluskyLab/PolarBearal3",
+    "source_ref": "e8476c3d8bed6c07bb0f0b7e604be183eafe3a15",
+    "runtime_pins": ".NET SDK 6.0.428, MathNet.Numerics 5.0.0",
+    "wrapper": "scripts/run_polarbearal.sh",
+    "reason": "Official PolarBearal3 C# source is public and was built with .NET SDK 6. The wrapper adds only a CLI entry point and a compile-only missing-break fix for the current upstream main branch."
+  }
+]

@@ -1,0 +1,42 @@
+schema: betlas.benchmark-config.latest
+models:
+  include:
+    - grammar_rules
+    - logistic_l2
+    - hist_gradient_boosting
+    - xgboost_tuned
+logistic_l2:
+  C: 1.0
+  max_iter: 2500
+  class_weight: balanced
+hist_gradient_boosting:
+  learning_rate: 0.05
+  max_leaf_nodes: 31
+  l2_regularization: 0.05
+xgboost:
+  enabled: true
+  n_estimators: 320
+  tree_method: hist
+  n_jobs: 4
+  inner_splits: 2
+  param_grid:
+    - max_depth: 3
+      learning_rate: 0.05
+      subsample: 0.85
+      colsample_bytree: 0.85
+      reg_lambda: 1.0
+    - max_depth: 4
+      learning_rate: 0.05
+      subsample: 0.85
+      colsample_bytree: 0.80
+      reg_lambda: 2.0
+    - max_depth: 4
+      learning_rate: 0.08
+      subsample: 0.90
+      colsample_bytree: 0.85
+      reg_lambda: 3.0
+    - max_depth: 5
+      learning_rate: 0.06
+      subsample: 0.85
+      colsample_bytree: 0.90
+      reg_lambda: 5.0

@@ -1,0 +1,15 @@
+cath_dir: data/external/cath
+mmcif_dir: data/external/pdb_mmcif
+target_per_class: 220
+include_putative: false
+all_eligible: true
+max_per_pdb: 4
+initial_max_per_s35: 1
+max_s35_cap: 64
+workers: 8
+download_workers: 32
+seed: 13
+splits: 5
+force_download: false
+benchmark_config: configs/benchmark/full_scale.yaml
+out_dir: runs/betlas_full

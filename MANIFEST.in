@@ -1,0 +1,20 @@
+include README.md
+include pyproject.toml
+include environment.yml
+recursive-include configs *.yaml
+recursive-include reproducibility *.txt *.yml
+include scripts/__init__.py
+include scripts/run_full_pipeline.py
+recursive-include scripts/external_baselines *
+recursive-include tests *.py
+global-exclude __pycache__/*
+global-exclude *.py[cod]
+prune data
+prune manuscript
+prune figures
+prune runs
+prune docs
+prune scripts/publication
+prune scripts/readouts
+prune scripts/reproducibility/readout_benchmarks
+prune scripts/archive

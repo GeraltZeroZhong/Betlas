@@ -1,0 +1,66 @@
+schema: betlas.benchmark-config.latest
+models:
+  include:
+    - grammar_rules
+    - logistic_l2
+    - random_forest
+    - extra_trees
+    - hist_gradient_boosting
+    - xgboost_tuned
+logistic_l2:
+  C: 1.0
+  max_iter: 2000
+  class_weight: balanced
+random_forest:
+  n_estimators: 500
+  max_features: sqrt
+  min_samples_leaf: 2
+  class_weight: balanced_subsample
+  n_jobs: -1
+extra_trees:
+  n_estimators: 700
+  max_features: sqrt
+  min_samples_leaf: 1
+  class_weight: balanced
+  n_jobs: -1
+hist_gradient_boosting:
+  learning_rate: 0.05
+  max_leaf_nodes: 31
+  l2_regularization: 0.05
+xgboost:
+  enabled: true
+  n_estimators: 450
+  tree_method: hist
+  n_jobs: -1
+  inner_splits: 3
+  param_grid:
+    - max_depth: 3
+      learning_rate: 0.05
+      subsample: 0.85
+      colsample_bytree: 0.85
+      reg_lambda: 1.0
+    - max_depth: 3
+      learning_rate: 0.08
+      subsample: 0.90
+      colsample_bytree: 0.90
+      reg_lambda: 2.0
+    - max_depth: 4
+      learning_rate: 0.05
+      subsample: 0.85
+      colsample_bytree: 0.80
+      reg_lambda: 2.0
+    - max_depth: 4
+      learning_rate: 0.08
+      subsample: 0.90
+      colsample_bytree: 0.85
+      reg_lambda: 3.0
+    - max_depth: 5
+      learning_rate: 0.04
+      subsample: 0.80
+      colsample_bytree: 0.80
+      reg_lambda: 4.0
+    - max_depth: 5
+      learning_rate: 0.06
+      subsample: 0.85
+      colsample_bytree: 0.90
+      reg_lambda: 5.0
