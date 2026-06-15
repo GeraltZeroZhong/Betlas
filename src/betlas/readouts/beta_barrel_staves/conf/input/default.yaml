@@ -1,0 +1,11 @@
+path: ""
+allowed_suffixes:
+  - .pdb
+  - .cif
+  - .mmcif
+  - .pdb.gz
+  - .cif.gz
+  - .mmcif.gz
+min_chain_residues: 20
+min_sheet_residues: 10
+min_informative_slices: 3

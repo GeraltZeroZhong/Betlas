@@ -1,0 +1,23 @@
+# External Methods
+
+This directory contains adapters for external baseline methods used during
+evaluation. Adapters live outside the `betlas.readouts.beta_barrel_detection` package so external
+licensing, data, and runtime requirements stay separate from the MIT-licensed
+detector.
+
+Each method should provide:
+
+- a short README with the upstream source, license, expected inputs, and output
+  interpretation;
+- a small runner that invokes the external method or parses its output;
+- smoke-test fixtures under `scripts/external_baselines/beta_barrel_detection/` when the runner needs
+  project-local test data.
+
+Current adapters:
+
+- `isitabarrel_structure_map`: structure-derived contact-map baseline.
+- `pred_tmbb2_single_juchmme`: sequence-only topology baseline using an
+  external JUCHMME/PRED-TMBB2 checkout.
+- `foldseek_tmalign_structure_search`: structure-search baseline using an
+  external Foldseek binary in global TMalign mode against a curated reference
+  barrel-chain database.

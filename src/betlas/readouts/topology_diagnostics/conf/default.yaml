@@ -1,0 +1,124 @@
+schema: betlas.topology-diagnostics-config.v1
+
+io:
+  features_csv: data/processed/betlas_full_features.csv
+  predictions_csv: runs/betlas_full_benchmark/oof_predictions.csv
+  output_csv: runs/readouts/topology_diagnostics_full/topology_diagnostics.csv
+  manifest_path: runs/readouts/topology_diagnostics_full/topology_diagnostics.manifest.json
+
+probability:
+  model: xgboost_tuned
+  rule_softmax_temperature: 1.0
+  unavailable_margin_low_confidence_range: [0.55, 0.90]
+  top2_margin_ambiguity_range: [0.03, 0.32]
+  rule_margin_ambiguity_range: [0.03, 0.30]
+
+neighbors:
+  k: 12
+
+ambiguity:
+  high_threshold: 0.55
+  moderate_threshold: 0.35
+  boundary_score_threshold: 0.35
+  jelly_sandwich_boundary_threshold: 0.40
+  barrel_sandwich_boundary_threshold: 0.48
+  neighbor_boundary_threshold: 0.35
+  label_rule_conflict_threshold: 0.45
+  strong_label_rule_conflict_threshold: 0.65
+
+mixed:
+  flag_score_threshold: 0.48
+  high_score_threshold: 0.62
+  high_ambiguity_threshold: 0.55
+  moderate_ambiguity_threshold: 0.35
+  min_structural_type_count: 2
+  type_thresholds:
+    jelly_roll_inside_sandwich: 0.50
+    barrel_closure_with_sandwich: 0.52
+    barrel_closure_with_jelly_roll: 0.50
+    propeller_repeat_with_sandwich: 0.45
+    prism_repeat_with_sandwich: 0.45
+    solenoid_axis_with_sheet_packing: 0.45
+    tim_shell_with_barrel_closure: 0.45
+
+scale_ranges:
+  greek_key_proxy: [0.05, 0.55]
+  jelly_roll_order_nonlocal: [0.03, 0.45]
+  bilayer_packing: [0.04, 0.36]
+  lobe_guard: [0.04, 0.42]
+  anti_closure_barrel_wall: [0.16, 0.52]
+  sheet_pair_cross_contact_density8: [0.05, 0.45]
+  slice_closure: [0.62, 0.88]
+  angular_coverage: [0.64, 0.90]
+  global_gap: [0.18, 0.52]
+  slice_gap: [0.22, 0.58]
+  barrel_wall_continuity: [0.08, 0.55]
+  contact_cycle_rank: [0.03, 0.30]
+  sandwich_lobe_guard_for_barrel: [0.18, 0.52]
+  periodic_fft: [0.08, 0.24]
+  solenoid_elongation: [1.5, 4.5]
+  alpha_shell: [0.0, 8.0]
+  rule_conflict_margin: [0.25, 0.90]
+
+continuous_weights:
+  two_sheet_context:
+    two_sheet_count: 0.35
+    top2_sheet_fraction: 0.30
+    top2_sheet_balance: 0.20
+    two_face_context: 0.15
+  jelly_rollness:
+    two_sheet_context: 0.18
+    top2_interleave: 0.17
+    order_displacement: 0.15
+    nonlocal_sheet_order: 0.13
+    sheet_order_inversion: 0.12
+    greek_key_proxy: 0.11
+    jelly_roll_order_nonlocal: 0.08
+    eight_run_context: 0.04
+    grammar_jelly_probability: 0.02
+  sandwichness:
+    two_sheet_context: 0.17
+    top2_sheet_fraction: 0.12
+    top2_sheet_balance: 0.12
+    bilayer_packing: 0.16
+    lobe_guard: 0.13
+    face_alignment: 0.10
+    normal_alignment: 0.08
+    cross_sheet_contacts: 0.06
+    anti_closure: 0.04
+    grammar_sandwich_probability: 0.02
+  barrel_likeness:
+    slice_closure: 0.14
+    angular_coverage: 0.12
+    small_global_gap: 0.10
+    slice_gap_continuity: 0.08
+    barrel_wall_continuity: 0.14
+    contact_cycle_rank: 0.10
+    degree2_ring: 0.10
+    sector_occupancy: 0.08
+    high_coverage_slices: 0.08
+    non_bilayer_guard: 0.06
+    grammar_barrel_probability: 0.04
+
+ambiguity_weights:
+  probability_margin: 0.22
+  probability_entropy: 0.09
+  rule_margin: 0.12
+  jelly_sandwich_conflict: 0.14
+  barrel_sandwich_conflict: 0.10
+  barrel_sequence_conflict: 0.08
+  boundary_neighbor: 0.09
+  neighbor_entropy: 0.07
+  label_rule_conflict: 0.06
+  model_label_conflict: 0.03
+
+mixed_weights:
+  jelly_roll_inside_sandwich: 0.19
+  barrel_closure_with_sandwich: 0.17
+  barrel_closure_with_jelly_roll: 0.10
+  propeller_repeat_with_sandwich: 0.12
+  prism_repeat_with_sandwich: 0.08
+  solenoid_axis_with_sheet_packing: 0.08
+  tim_shell_with_barrel_closure: 0.08
+  secondary_signal_strength: 0.10
+  ambiguity_support: 0.08

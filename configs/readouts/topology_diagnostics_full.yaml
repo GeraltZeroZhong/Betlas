@@ -1,0 +1,10 @@
+schema: betlas.topology-diagnostics-config.v1
+
+io:
+  features_csv: data/processed/betlas_cath_features.csv
+  predictions_csv: runs/betlas_full_benchmark/oof_predictions.csv
+  output_csv: runs/readouts/topology_diagnostics_full/topology_diagnostics.csv
+  manifest_path: runs/readouts/topology_diagnostics_full/topology_diagnostics.manifest.json
+
+probability:
+  model: xgboost_tuned

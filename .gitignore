@@ -1,0 +1,78 @@
+# Python/build/cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.cache/
+build/
+dist/
+*.egg-info/
+.venv-evolocity/
+.venv*/
+venv/
+env/
+
+# Local agents and editor/runtime state
+.agents/
+.codex/
+
+# Internal generated runs and temporary work
+runs/
+**/tmp/
+**/cache/
+**/caches/
+**/foldseek_tmp/
+**/dssp_cache/
+
+# Data boundary: publish curated release assets separately
+data/interim/**
+!data/interim/.gitkeep
+data/processed/**
+!data/processed/README.md
+data/readouts/**
+data/audit/**
+data/external/**
+data/manifest*.json
+data/source_snapshot*.json
+
+# Large/generated external database artifacts
+**/*fsdb*
+**/*.dbtype
+**/*.index
+**/*.lookup
+**/*.h3f
+**/*.h3i
+**/*.h3m
+**/*.h3p
+
+# Non-public documentation snapshots and archives
+docs/
+scripts/archive/
+scripts/archive*/
+scripts/external_baselines/**/.conda/
+scripts/external_baselines/**/downloads/
+scripts/external_baselines/**/runs/
+scripts/external_baselines/**/tools/
+figures/_archive/
+figures/audit/
+figures/unified_figures/**/source_data/retired/
+
+# Figure build/session artifacts not meant for public repository history
+*.pse
+figures/publication_main_v2/**/source_data/*__source_map.csv
+figures/publication_main_v2/source_inputs/
+figures/publication_main_v2/**/structure_inputs/
+figures/publication_main_v2/case_study_structure_render_manifest.csv
+
+# Manuscript, figure and data release assets are managed outside this code repository
+manuscript/
+figures/
+data/
+
+# Excluded manuscript/build and long-run operation scripts
+scripts/publication/
+scripts/readouts/
+scripts/reproducibility/readout_benchmarks/
+scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/baseline_reproducibility.md
+scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/smoke_results.md
+tests/test_bfvd_blastp_swissprot.py

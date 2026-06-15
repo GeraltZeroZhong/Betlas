@@ -1,0 +1,8 @@
+schema: betlas.ablation-config.latest
+model:
+  name: hist_gradient_boosting
+  learning_rate: 0.05
+  max_leaf_nodes: 31
+  l2_regularization: 0.05
+ablation:
+  max_group_combo_size: 3

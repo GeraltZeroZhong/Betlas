@@ -1,0 +1,11 @@
+# Versions recorded from the generated Evolocity robustness manifest.
+anndata==0.12.16
+evolocity==1.1
+matplotlib==3.10.9
+numpy==2.4.6
+pandas==2.3.3
+scanpy==1.12.1
+scikit-learn==1.8.0
+scipy==1.17.1
+torch==2.12.0
+umap-learn==0.5.12

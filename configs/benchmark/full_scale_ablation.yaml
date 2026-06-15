@@ -1,0 +1,17 @@
+schema: betlas.ablation-config.latest
+model:
+  name: xgboost
+  objective: multi:softprob
+  eval_metric: mlogloss
+  n_estimators: 120
+  max_depth: 4
+  learning_rate: 0.08
+  subsample: 0.9
+  colsample_bytree: 0.85
+  reg_lambda: 3.0
+  tree_method: hist
+  device: cuda
+  n_jobs: 1
+  verbosity: 0
+ablation:
+  max_group_combo_size: 3
