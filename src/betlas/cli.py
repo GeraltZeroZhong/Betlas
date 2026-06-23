@@ -88,6 +88,7 @@ def _structure_failed_row(args: argparse.Namespace, structure_state: dict[str, A
         "chain_id": chain_id,
         "domain_id": args.domain_id or f"{stem}_{chain_id}",
         "residue_ranges": args.residue_ranges or "",
+        "model_id": int(getattr(args, "model_id", 0) or 0),
         "source_mmcif_path": structure_state["path"],
         "source_mmcif_sha256": structure_state["sha256"],
         "source_mmcif_size": structure_state["size"],
@@ -175,6 +176,7 @@ def extract_features_command(args: argparse.Namespace) -> None:
                 record_id=args.record_id,
                 domain_id=args.domain_id,
                 pdb_id=args.pdb_id,
+                model_id=args.model_id,
             )
         except Exception as exc:
             if not args.write_failed_row:
@@ -372,7 +374,14 @@ def _grammar_parse_failure_detail(row: dict[str, Any]) -> str:
     warning = row.get("betlas_warnings", "")
     error = row.get("betlas_error", "")
     detail = str(error or warning or "betlas_parse_ok is not 1")
-    return detail.split(" Use --write-failed-row", 1)[0].strip()
+    return detail.split(" Use --write-failed-row", 1)[0].strip().rstrip(".")
+
+
+def _grammar_status_only_reason(row: dict[str, Any]) -> str:
+    status = str(row.get("betlas_score_status", "")).strip()
+    if status in {"parse_failed", "no_informative_slices"}:
+        return status
+    return ""
 
 
 def grammar_score_command(args: argparse.Namespace) -> None:
@@ -414,6 +423,8 @@ def grammar_score_command(args: argparse.Namespace) -> None:
         for index, row in enumerate(features.to_dict(orient="records"), start=1):
             if int(parse_ok.iloc[index - 1]) != 1:
                 continue
+            if _grammar_status_only_reason(row):
+                continue
             problems = missing_or_invalid_rule_inputs(row)
             if problems:
                 details = ", ".join(f"{name}={reason}" for name, reason in sorted(problems.items())[:8])
@@ -450,6 +461,11 @@ def grammar_score_command(args: argparse.Namespace) -> None:
         }
         if int(parse_ok.iloc[index]) != 1:
             out_row["betlas_score_status"] = "parse_failed"
+            rows.append(out_row)
+            continue
+        status_only = _grammar_status_only_reason(row)
+        if status_only:
+            out_row["betlas_score_status"] = status_only
             rows.append(out_row)
             continue
         explanation = explain_fold_grammar(row, fold=args.fold, strict=args.strict)
@@ -585,6 +601,12 @@ def assets_verify_command(args: argparse.Namespace) -> None:
         strict=False,
     )
     failures = 0
+    pending_hint = ""
+    if str(report.get("release_status", "")).lower() == "pending_release":
+        pending_hint = (
+            f"\tpending_release: populate cache with `betlas assets download {args.asset_id} "
+            "--base-url <local mirror>` or set BETLAS_ASSET_BASE_URL for that download first"
+        )
     for file_info in report["files"]:
         ok = bool(file_info["ok"])
         status = "ok" if ok else "failed"
@@ -592,7 +614,7 @@ def assets_verify_command(args: argparse.Namespace) -> None:
             failures += 1
         print(
             f"{file_info['filename']}\t{status}\t{file_info['reason']}\t"
-            f"cache={file_info['path']}"
+            f"cache={file_info['path']}{'' if ok else pending_hint}"
         )
     if failures:
         raise SystemExit(2)
@@ -678,6 +700,7 @@ def _slice_summary_payload(args: argparse.Namespace, bundle: Any) -> dict[str, A
         "domain_id": args.domain_id or f"{stem}_{args.chain}",
         "chain_id": args.chain,
         "residue_ranges": args.residue_ranges or "",
+        "model_id": int(args.model_id),
         "source_mmcif_path": source_state["path"],
         "source_mmcif_sha256": source_state["sha256"],
         "source_mmcif_size": source_state["size"],
@@ -713,6 +736,7 @@ def slice_command(args: argparse.Namespace) -> None:
         record_id=args.record_id,
         domain_id=args.domain_id,
         pdb_id=args.pdb_id,
+        model_id=args.model_id,
         axis=args.axis,
         config=config,
     )
@@ -725,6 +749,7 @@ def slice_command(args: argparse.Namespace) -> None:
             "domain_id",
             "chain_id",
             "residue_ranges",
+            "model_id",
             "source_mmcif_sha256",
             "source_mmcif_path",
             "source_mmcif_size",
@@ -757,6 +782,7 @@ def slice_command(args: argparse.Namespace) -> None:
                 "domain_id": payload["domain_id"],
                 "chain_id": payload["chain_id"],
                 "residue_ranges": payload["residue_ranges"],
+                "model_id": payload["model_id"],
                 "source_mmcif_sha256": payload["source_mmcif_sha256"],
                 "source_mmcif_path": payload["source_mmcif_path"],
                 "source_mmcif_size": payload["source_mmcif_size"],
@@ -797,6 +823,7 @@ def slice_command(args: argparse.Namespace) -> None:
             "domain_id",
             "chain_id",
             "residue_ranges",
+            "model_id",
             "source_mmcif_sha256",
             "source_mmcif_path",
             "source_mmcif_size",
@@ -839,6 +866,7 @@ def slice_command(args: argparse.Namespace) -> None:
                     "domain_id": payload["domain_id"],
                     "chain_id": payload["chain_id"],
                     "residue_ranges": payload["residue_ranges"],
+                    "model_id": payload["model_id"],
                     "source_mmcif_sha256": payload["source_mmcif_sha256"],
                     "source_mmcif_path": payload["source_mmcif_path"],
                     "source_mmcif_size": payload["source_mmcif_size"],
@@ -981,6 +1009,7 @@ def main(argv: list[str] | None = None) -> None:
             "  betlas extract-features --structure runs/examples/mini.cif --chain A --out runs/mini_features.csv\n"
             "  betlas grammar score --features runs/mini_features.csv\n\n"
             "Single-structure input currently accepts mmCIF files: .cif, .mmcif, .cif.gz, .mmcif.gz.\n"
+            "Multi-model mmCIF inputs default to --model-id 0, the first mmCIF model.\n"
             "Selected grammar/slice residues must use numeric author residue IDs; insertion-code ranges are rejected.\n"
             "Dataset construction and batch feature extraction may download CATH/RCSB data and can take time.\n"
             "Output: feature CSV with Betlas geometry columns, source mmCIF provenance, and parse-status columns."
@@ -990,6 +1019,7 @@ def main(argv: list[str] | None = None) -> None:
     extract.add_argument("--structure", default=None, help="Single mmCIF structure path for one-chain feature extraction.")
     extract.add_argument("--chain", default=None, help="Author chain id for --structure mode.")
     extract.add_argument("--residue-ranges", default="", help="Optional residue ranges for --structure mode, e.g. '10-180:A' or 'A:10-180'.")
+    extract.add_argument("--model-id", type=int, default=0, help="Zero-based mmCIF model id for --structure mode. Defaults to 0, the first model.")
     extract.add_argument("--record-id", default=None, help="Optional record id for --structure mode.")
     extract.add_argument("--domain-id", default=None, help="Optional domain id for --structure mode.")
     extract.add_argument("--pdb-id", default=None, help="Optional PDB id metadata for --structure mode.")
@@ -1147,12 +1177,14 @@ def main(argv: list[str] | None = None) -> None:
             "  betlas slice 1abc.cif --chain A --residue-ranges 10-180:A --points-out runs/slice_points.csv\n\n"
             "Output summary keys match the unprefixed values behind betlas_axis_best_* feature columns. "
             "The default axis is the same best-axis scoring rule used during Betlas feature extraction. "
+            "Multi-model mmCIF inputs default to --model-id 0, the first mmCIF model. "
             "Selected residues must use numeric author residue IDs; insertion-code ranges are rejected."
         ),
     )
     slice_parser.add_argument("path", help="Input mmCIF or mmCIF.gz file.")
     slice_parser.add_argument("--chain", required=True, help="Author chain id to slice.")
     slice_parser.add_argument("--residue-ranges", default="", help="Optional residue range string such as '10-180:A'.")
+    slice_parser.add_argument("--model-id", type=int, default=0, help="Zero-based mmCIF model id. Defaults to 0, the first model.")
     slice_parser.add_argument("--axis", default="best", help="Axis hypothesis to use: best, strand_axis, point_pc1, point_pc2, or point_pc3.")
     slice_parser.add_argument("--record-id", default=None, help="Optional record id used in summary metadata.")
     slice_parser.add_argument("--domain-id", default=None, help="Optional domain id used in summary metadata.")

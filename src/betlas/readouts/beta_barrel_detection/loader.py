@@ -26,8 +26,8 @@ def _format_structure_parse_error(file_path: str, error: Exception) -> str:
     if "_atom_site." in detail:
         return (
             f"Failed to parse structure {file_path}: input mmCIF lacks atom-site fields "
-            "required by Biopython/DSSP readouts. The packaged mini.cif fixture is for "
-            f"grammar/slice smoke tests only. Parser detail: {detail}"
+            "required by Biopython/DSSP readouts. Minimal grammar/slice fixtures may not "
+            f"be valid readout inputs. Parser detail: {detail}"
         )
     return f"Failed to parse structure {file_path}: {detail}"
 
@@ -42,7 +42,12 @@ _TWO_LETTER_ELEMENTS = {
 }
 
 
-def _infer_element_from_atom_name(atom_name: str) -> str:
+def _infer_element_from_atom_name(
+    atom_name: str,
+    *,
+    protein_residue: bool = False,
+    residue_name: str = "",
+) -> str:
     """
     Infer an element symbol from a PDB atom name.
 
@@ -65,6 +70,13 @@ def _infer_element_from_atom_name(atom_name: str) -> str:
         return ""
     s = s.upper()
 
+    if protein_residue:
+        # Protein atom names such as CA/CD/HG mean C-alpha/C-delta/H-gamma, not
+        # calcium/cadmium/mercury. MSE is the common protein-like exception.
+        if residue_name.strip().upper() == "MSE" and s.startswith("SE"):
+            return "Se"
+        return s[0]
+
     if len(s) >= 2 and s[:2] in _TWO_LETTER_ELEMENTS:
         return s[0] + s[1].lower()
     return s[0]
@@ -73,14 +85,21 @@ def _infer_element_from_atom_name(atom_name: str) -> str:
 def _fill_missing_atom_elements(model) -> int:
     """Fill empty or placeholder ``atom.element`` values and return the count."""
     fixed = 0
-    for atom in model.get_atoms():
-        elem = (getattr(atom, "element", "") or "").strip()
-        if elem and elem != "X":
-            continue
-        inf = _infer_element_from_atom_name(atom.get_name())
-        if inf:
-            atom.element = inf
-            fixed += 1
+    for residue in model.get_residues():
+        protein_residue = is_aa(residue, standard=False)
+        residue_name = str(residue.get_resname())
+        for atom in residue:
+            elem = (getattr(atom, "element", "") or "").strip()
+            if elem and elem != "X":
+                continue
+            inf = _infer_element_from_atom_name(
+                atom.get_name(),
+                protein_residue=protein_residue,
+                residue_name=residue_name,
+            )
+            if inf:
+                atom.element = inf
+                fixed += 1
     return fixed
 
 

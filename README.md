@@ -162,6 +162,9 @@ beta-sheet segments is treated as a failed or non-informative input, not as a
 successful all-zero result. Selected grammar/slice residues must currently use
 numeric author residue IDs; insertion-coded residues are rejected instead of
 being silently dropped.
+Multi-model mmCIF inputs default to model id `0`, the first mmCIF model. Use
+`--model-id` in `extract-features --structure` and `slice` when a different
+model should be analyzed.
 
 Beta-barrel detection and candidate stave counting accept:
 
@@ -188,8 +191,10 @@ Batch feature extraction expects one row per domain or chain. Required columns:
 | `residue_ranges` | Optional residue range expression such as `10-180:A`. |
 | `fold_label_final` | Fold label used by benchmark and ablation workflows. |
 
-Benchmark grouping uses the first non-empty value from
-`cath_s35_cluster_id`, `cath_homology_code`, then `pdb_id`.
+Benchmark grouping builds connected components across non-empty
+`cath_s35_cluster_id`, `cath_homology_code`, and `pdb_id` values. Every retained
+row must have at least one of those identifiers so grouped cross-validation
+cannot silently fall back to row-level splits.
 
 ### Feature CSV
 
@@ -311,6 +316,9 @@ strand/stave count. Detection `decision_score` is positive BARREL decision
 support, uses `0` for `NON_BARREL` rows, and keeps raw geometry in `score_raw`
 and `score_adjust`. `decision_score` and staves `confidence` are deterministic
 heuristic evidence scores, not calibrated probabilities.
+For multi-model structure files, readout commands use the first model exposed
+by Biopython/DSSP; use grammar/slice `--model-id` for explicit model-level
+inspection.
 
 The `--barrel-decisions` CSV gate is a conservative post-hoc output gate: the
 staves pipeline still prepares/analyzes rows, then reports non-filtered candidate stave counts

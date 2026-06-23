@@ -102,6 +102,73 @@ def test_benchmark_writes_preflight_when_global_classes_missing(tmp_path) -> Non
     assert set(preflight["missing_global_classes"]) == set(FOLD_LABELS[3:])
 
 
+def test_benchmark_and_ablation_fail_fast_when_group_identifiers_missing(tmp_path) -> None:
+    features = tmp_path / "empty_groups.csv"
+    rows = [
+        {
+            "record_id": f"r{idx}",
+            "pdb_id": "",
+            "domain_id": f"d{idx}",
+            "cath_s35_cluster_id": "",
+            "cath_homology_code": "",
+            "fold_label_final": label,
+            "betlas_parse_ok": 1,
+            "betlas_axis_best_angular_coverage": float(idx + 1),
+        }
+        for idx, label in enumerate(FOLD_LABELS)
+    ]
+    pd.DataFrame(rows).to_csv(features, index=False)
+
+    benchmark_out = tmp_path / "benchmark"
+    with pytest.raises(ValueError, match="non-empty group identifier"):
+        run_grouped_benchmark(features, benchmark_out, n_splits=2)
+    benchmark_preflight = pd.read_json(benchmark_out / "benchmark_preflight.json", typ="series")
+    assert benchmark_preflight["status"] == "failed"
+    assert benchmark_preflight["failure_stage"] == "group_coverage"
+    assert benchmark_preflight["missing_group_row_count"] == len(FOLD_LABELS)
+
+    ablation_out = tmp_path / "ablation"
+    with pytest.raises(ValueError, match="non-empty group identifier"):
+        run_ablation_suite(features, ablation_out, n_splits=2)
+    ablation_preflight = pd.read_json(ablation_out / "ablation_preflight.json", typ="series")
+    assert ablation_preflight["status"] == "failed"
+    assert ablation_preflight["failure_stage"] == "group_coverage"
+    assert ablation_preflight["missing_group_row_count"] == len(FOLD_LABELS)
+
+
+def test_benchmark_and_ablation_split_failure_preflight_is_marked_failed(tmp_path) -> None:
+    features = tmp_path / "split_failed.csv"
+    rows = [
+        {
+            "record_id": f"r{idx}",
+            "pdb_id": f"p{idx}",
+            "domain_id": f"d{idx}",
+            "cath_s35_cluster_id": f"g{idx}",
+            "fold_label_final": label,
+            "betlas_parse_ok": 1,
+            "betlas_axis_best_angular_coverage": float(idx + 1),
+        }
+        for idx, label in enumerate(FOLD_LABELS)
+    ]
+    pd.DataFrame(rows).to_csv(features, index=False)
+
+    benchmark_out = tmp_path / "benchmark_split_failed"
+    with pytest.raises(ValueError, match="complete class coverage"):
+        run_grouped_benchmark(features, benchmark_out, n_splits=3)
+    benchmark_preflight = pd.read_json(benchmark_out / "benchmark_preflight.json", typ="series")
+    assert benchmark_preflight["status"] == "failed"
+    assert benchmark_preflight["failure_stage"] == "split_coverage"
+    assert benchmark_preflight["effective_split_strategy"] == "split_failed"
+
+    ablation_out = tmp_path / "ablation_split_failed"
+    with pytest.raises(ValueError, match="complete class coverage"):
+        run_ablation_suite(features, ablation_out, n_splits=3)
+    ablation_preflight = pd.read_json(ablation_out / "ablation_preflight.json", typ="series")
+    assert ablation_preflight["status"] == "failed"
+    assert ablation_preflight["failure_stage"] == "split_coverage"
+    assert ablation_preflight["effective_split_strategy"] == "split_failed"
+
+
 def test_benchmark_grouped_cv_is_structure_disjoint_even_with_unique_cath_groups(tmp_path) -> None:
     features = tmp_path / "features.csv"
     out_dir = tmp_path / "benchmark"

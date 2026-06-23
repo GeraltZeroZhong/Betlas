@@ -25,7 +25,9 @@ from .benchmark import (
     BENCHMARK_GROUP_COLUMNS,
     BENCHMARK_REQUIRED_COLUMNS,
     _connected_group_series,
+    _group_presence_mask,
     _group_source_counts,
+    _missing_group_examples,
     _require_columns,
     _split_summary,
     _xgboost_available,
@@ -349,12 +351,10 @@ def run_ablation_suite(
 
     encoder = LabelEncoder()
     encoder.fit(sorted(FOLD_LABELS))
-    groups = _groups(df)
-    if not any(str(group).strip() for group in groups):
-        raise ValueError(
-            "ablation could not derive grouped cross-validation groups; provide at least one "
-            f"non-empty column from {', '.join(BENCHMARK_GROUP_COLUMNS)}"
-        )
+    group_presence = _group_presence_mask(df, BENCHMARK_GROUP_COLUMNS)
+    missing_group_count = int((~group_presence).sum())
+    group_examples = _missing_group_examples(df, group_presence)
+    groups = _groups(df) if missing_group_count == 0 else np.asarray([], dtype=object)
     y = encoder.transform(df["fold_label_final"])
     model_name = _cfg_str(ablation_config, "model.name", "hist_gradient_boosting")
     dependency_status = {model_name: "requested"}
@@ -374,7 +374,9 @@ def run_ablation_suite(
         "group_columns_priority": list(BENCHMARK_GROUP_COLUMNS),
         "grouping_strategy": "connected_components_across_group_columns",
         "group_source_counts": _group_source_counts(df),
-        "group_count": int(pd.Series(groups).astype(str).nunique()),
+        "missing_group_row_count": missing_group_count,
+        "missing_group_row_examples": group_examples,
+        "group_count": int(pd.Series(groups).astype(str).nunique()) if missing_group_count == 0 else 0,
         "feature_set": "raw_geometry",
         "feature_count": int(len(feature_cols)),
         "features_csv": str(features_csv),
@@ -389,6 +391,26 @@ def run_ablation_suite(
     write_json(out_dir / "ablation_preflight.json", preflight)
     if dependency_error:
         raise RuntimeError(dependency_error)
+    if missing_group_count:
+        write_json(
+            out_dir / "ablation_preflight.json",
+            {
+                **preflight,
+                "status": "failed",
+                "failure_stage": "group_coverage",
+                "effective_split_strategy": "not_run_missing_group_identifiers",
+                "error": (
+                    "ablation requires every retained row to have at least one non-empty "
+                    f"group identifier in {', '.join(BENCHMARK_GROUP_COLUMNS)}; "
+                    f"missing rows: {group_examples}"
+                ),
+            },
+        )
+        raise ValueError(
+            "ablation requires every retained row to have at least one non-empty "
+            f"group identifier in {', '.join(BENCHMARK_GROUP_COLUMNS)}; "
+            f"missing rows: {group_examples}"
+        )
     if missing_global_classes:
         write_json(
             out_dir / "ablation_preflight.json",
@@ -420,7 +442,10 @@ def run_ablation_suite(
             out_dir / "ablation_preflight.json",
             {
                 **preflight,
+                "status": "failed",
+                "failure_stage": "split_coverage",
                 "effective_split_strategy": "split_failed",
+                "error": str(exc),
                 "split_error": str(exc),
             },
         )

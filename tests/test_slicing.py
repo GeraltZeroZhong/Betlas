@@ -264,10 +264,23 @@ def test_extract_features_single_structure_cli_feeds_grammar_score(tmp_path: Pat
     scores = tmp_path / "scores.csv"
     _write_minimal_mmcif(structure)
 
-    cli.main(["extract-features", "--structure", str(structure), "--chain", "A", "--out", str(features)])
+    cli.main(
+        [
+            "extract-features",
+            "--structure",
+            str(structure),
+            "--chain",
+            "A",
+            "--model-id",
+            "0",
+            "--out",
+            str(features),
+        ]
+    )
     row = pd.read_csv(features).iloc[0]
 
     assert row["record_id"] == "mini_A"
+    assert row["model_id"] == 0
     assert row["betlas_parse_ok"] == 1
     assert "Wrote 1 feature row" in capsys.readouterr().out
 
@@ -277,8 +290,10 @@ def test_extract_features_single_structure_cli_feeds_grammar_score(tmp_path: Pat
     assert "betlas_rule_score_beta_barrel" in scored
 
     points = tmp_path / "points.csv"
-    cli.main(["slice", str(structure), "--chain", "A", "--points-out", str(points)])
-    point_columns = set(pd.read_csv(points).columns)
+    cli.main(["slice", str(structure), "--chain", "A", "--model-id", "0", "--points-out", str(points)])
+    point_rows = pd.read_csv(points)
+    point_columns = set(point_rows.columns)
+    assert point_rows.loc[0, "model_id"] == 0
     assert {"auth_seq_id", "residue_uid", "strand_id", "sheet_id", "sheet_range_id"} <= point_columns
 
 
@@ -459,6 +474,30 @@ def test_grammar_score_rejects_parse_failed_rows_by_default(
     scored = pd.read_csv(permissive)
     assert scored.loc[0, "betlas_parse_ok"] == 0
     assert scored.loc[0, "betlas_score_status"] == "parse_failed"
+    assert "betlas_top_fold" not in scored.columns
+    assert not any(column.startswith("betlas_rule_score_") for column in scored.columns)
+
+
+def test_grammar_score_keeps_no_informative_rows_status_only_in_compat_mode(tmp_path: Path) -> None:
+    features = tmp_path / "no_informative.csv"
+    out = tmp_path / "scored.csv"
+    pd.DataFrame(
+        [
+            {
+                "record_id": "r1",
+                "chain_id": "A",
+                "betlas_parse_ok": 1,
+                "betlas_score_status": "no_informative_slices",
+                "betlas_axis_best_slice_count": 0,
+                "betlas_axis_best_slice_coverage_median": 0.0,
+            }
+        ]
+    ).to_csv(features, index=False)
+
+    cli.main(["grammar", "score", "--features", str(features), "--no-strict", "--out", str(out)])
+
+    scored = pd.read_csv(out)
+    assert scored.loc[0, "betlas_score_status"] == "no_informative_slices"
     assert "betlas_top_fold" not in scored.columns
     assert not any(column.startswith("betlas_rule_score_") for column in scored.columns)
 

@@ -273,12 +273,19 @@ def _connected_group_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Se
             else:
                 union(previous, index)
 
+    missing_indices = [index for index, has_token in enumerate(row_has_token) if not has_token]
+    if missing_indices:
+        examples = ", ".join(str(df.index[index]) for index in missing_indices[:10])
+        more = f"; plus {len(missing_indices) - 10} more" if len(missing_indices) > 10 else ""
+        raise ValueError(
+            "grouped cross-validation requires every retained row to have at least one "
+            f"non-empty group identifier in {', '.join(columns)}; missing row indices: "
+            f"{examples}{more}"
+        )
+
     labels: list[str] = []
     root_to_label: dict[int, str] = {}
     for index in range(n):
-        if not row_has_token[index]:
-            labels.append(f"missing_group_row={index}")
-            continue
         root = find(index)
         label = root_to_label.get(root)
         if label is None:
@@ -287,6 +294,24 @@ def _connected_group_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Se
             root_to_label[root] = label
         labels.append(label)
     return pd.Series(labels, index=df.index, dtype=object)
+
+
+def _group_presence_mask(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    present = pd.Series(False, index=df.index)
+    for column in columns:
+        if column not in df:
+            continue
+        present = present | df[column].astype(str).str.strip().ne("")
+    return present
+
+
+def _missing_group_examples(df: pd.DataFrame, mask: pd.Series, *, limit: int = 10) -> list[str]:
+    if "record_id" in df.columns:
+        values = df.loc[~mask, "record_id"].astype(str).str.strip()
+        values = values[values.ne("")]
+        if not values.empty:
+            return values.head(limit).tolist()
+    return [str(index) for index in df.index[~mask][:limit]]
 
 
 def _require_columns(df: pd.DataFrame, columns: tuple[str, ...], *, context: str) -> None:
@@ -654,12 +679,14 @@ def run_grouped_benchmark(
     y = encoder.transform(df["fold_label_final"])
     X = df[feature_cols].apply(pd.to_numeric, errors="coerce")
     include = set(_included_models(benchmark_config))
-    groups = _connected_group_series(df, BENCHMARK_GROUP_COLUMNS).to_numpy()
-    if not any(str(group).strip() for group in groups):
-        raise ValueError(
-            "benchmark could not derive grouped cross-validation groups; provide at least one "
-            f"non-empty column from {', '.join(BENCHMARK_GROUP_COLUMNS)}"
-        )
+    group_presence = _group_presence_mask(df, BENCHMARK_GROUP_COLUMNS)
+    missing_group_count = int((~group_presence).sum())
+    group_examples = _missing_group_examples(df, group_presence)
+    groups = (
+        _connected_group_series(df, BENCHMARK_GROUP_COLUMNS).to_numpy()
+        if missing_group_count == 0
+        else np.asarray([], dtype=object)
+    )
     missing_rule_scores = [column for column in RULE_SCORE_COLUMNS if column not in df.columns]
     base_preflight = {
         "input_rows": int(len(df_all)),
@@ -672,7 +699,9 @@ def run_grouped_benchmark(
         "group_columns_priority": list(BENCHMARK_GROUP_COLUMNS),
         "grouping_strategy": "connected_components_across_group_columns",
         "group_source_counts": _group_source_counts(df),
-        "group_count": int(pd.Series(groups).astype(str).nunique()),
+        "missing_group_row_count": missing_group_count,
+        "missing_group_row_examples": group_examples,
+        "group_count": int(pd.Series(groups).astype(str).nunique()) if missing_group_count == 0 else 0,
         "feature_set": feature_set,
         "feature_count": int(len(feature_cols)),
         "rule_score_columns_present": not missing_rule_scores,
@@ -687,6 +716,26 @@ def run_grouped_benchmark(
         "model_dependency_status": {model: "requested" for model in sorted(include)},
         "allow_model_skip": bool(_cfg_get(benchmark_config, "models.allow_model_skip", False)),
     }
+    if missing_group_count:
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **base_preflight,
+                "status": "failed",
+                "failure_stage": "group_coverage",
+                "effective_split_strategy": "not_run_missing_group_identifiers",
+                "error": (
+                    "benchmark requires every retained row to have at least one non-empty "
+                    f"group identifier in {', '.join(BENCHMARK_GROUP_COLUMNS)}; "
+                    f"missing rows: {group_examples}"
+                ),
+            },
+        )
+        raise ValueError(
+            "benchmark requires every retained row to have at least one non-empty "
+            f"group identifier in {', '.join(BENCHMARK_GROUP_COLUMNS)}; "
+            f"missing rows: {group_examples}"
+        )
     if "grammar_rules" in include and missing_rule_scores:
         write_json(
             out_dir / "benchmark_preflight.json",
@@ -735,7 +784,10 @@ def run_grouped_benchmark(
             out_dir / "benchmark_preflight.json",
             {
                 **base_preflight,
+                "status": "failed",
+                "failure_stage": "split_coverage",
                 "effective_split_strategy": "split_failed",
+                "error": str(exc),
                 "split_error": str(exc),
             },
         )

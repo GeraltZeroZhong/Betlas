@@ -86,6 +86,7 @@ def main(argv: list[str] | None = None) -> None:
             "  betlas readout beta-barrel-detection --check-env\n\n"
             "Output CSV: one row per analyzed chain with beta-barrel-like geometry decision, uncalibrated heuristic score, slice, geometry, and runtime-status columns.\n"
             "Stdout is progress/status text, not CSV; pass --out or output.csv=... for a CSV path. Default CSV: beta_barrel_detection_results.csv.\n"
+            "Multi-model structures are analyzed using the first model exposed by Biopython/DSSP.\n"
             "DSSP: pass runtime.dssp_bin_path=/path/to/mkdssp or use --check-env to verify availability.\n"
             "Hydra overrides: KEY=VALUE tokens are forwarded after CLI flags and can set nested config values."
         ),

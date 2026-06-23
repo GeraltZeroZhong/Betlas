@@ -26,8 +26,8 @@ def _format_structure_parse_error(file_path: str, error: Exception) -> str:
     if "_atom_site." in detail:
         return (
             f"Failed to parse structure {file_path}: input mmCIF lacks atom-site fields "
-            "required by Biopython/DSSP readouts. The packaged mini.cif fixture is for "
-            f"grammar/slice smoke tests only. Parser detail: {detail}"
+            "required by Biopython/DSSP readouts. Minimal grammar/slice fixtures may not "
+            f"be valid readout inputs. Parser detail: {detail}"
         )
     return f"Failed to parse structure {file_path}: {detail}"
 

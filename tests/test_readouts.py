@@ -43,6 +43,7 @@ from betlas.readouts.beta_barrel_staves.io.prepare_cache import (
 from betlas.readouts.beta_barrel_staves.io.prepare_cache import (
     store_prepare_payloads as store_staves_prepare_payloads,
 )
+from betlas.readouts.beta_barrel_staves.models import StrandCountResult
 from betlas.readouts.beta_barrel_staves.pipeline import (
     _prepare_error_rows as staves_prepare_error_rows,
 )
@@ -130,6 +131,22 @@ def test_readout_subpackage_all_keeps_implementation_helpers_private() -> None:
 
     assert not implementation_helpers.intersection(detection_api.__all__)
     assert not implementation_helpers.intersection(staves_api.__all__)
+
+
+def test_staves_result_exposes_typed_source_path() -> None:
+    result = StrandCountResult.from_row(
+        {
+            "filename": "example.cif",
+            "source_path": "/tmp/example.cif",
+            "chain": "A",
+            "result": "FILTERED_OUT",
+            "result_stage": "prefilter",
+            "reason": "unit",
+        }
+    )
+
+    assert result.source_path == "/tmp/example.cif"
+    assert result.to_dict()["source_path"] == "/tmp/example.cif"
 
 
 def test_beta_barrel_staves_config_defaults_are_betlas_owned():

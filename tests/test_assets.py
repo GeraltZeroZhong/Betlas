@@ -235,6 +235,8 @@ def test_pending_asset_verify_guides_download_not_verify_base_url(
     text = capsys.readouterr().out
     assert "tiny.txt\tfailed\tmissing" in text
     assert "cache=" in text
+    assert "pending_release" in text
+    assert "betlas assets download pending-asset --base-url <local mirror>" in text
 
 
 def test_asset_manifest_rejects_unsafe_download_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -962,6 +962,7 @@ def extract_structure_features(
     record_id: str | None = None,
     domain_id: str | None = None,
     pdb_id: str | None = None,
+    model_id: int = 0,
 ) -> dict[str, Any]:
     """Extract Betlas features for one user-provided mmCIF chain."""
 
@@ -975,6 +976,8 @@ def extract_structure_features(
         raise FileNotFoundError(f"structure file does not exist: {path}")
     if not str(chain_id).strip():
         raise ValueError("chain id is required for single-structure feature extraction")
+    if int(model_id) < 0:
+        raise ValueError("model_id must be a zero-based non-negative integer")
 
     stem = path.name.split(".", 1)[0].lower()
     domain = DomainCandidate(
@@ -983,6 +986,7 @@ def extract_structure_features(
         chain_id=str(chain_id),
         domain_id=domain_id or f"{stem}_{chain_id}",
         residue_ranges=residue_ranges,
+        model_id=int(model_id),
         fold_label_final="unlabeled",
         evidence_level="user_input",
         label_source_primary="user_input",

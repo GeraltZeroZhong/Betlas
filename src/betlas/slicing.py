@@ -411,6 +411,7 @@ def slice_mmcif(
     record_id: str | None = None,
     domain_id: str | None = None,
     pdb_id: str | None = None,
+    model_id: int = 0,
     axis: str = "best",
     config: SliceConfig | None = None,
 ) -> SliceBundle:
@@ -423,6 +424,8 @@ def slice_mmcif(
         )
     if not path.exists():
         raise FileNotFoundError(f"structure file does not exist: {path}")
+    if int(model_id) < 0:
+        raise ValueError("model_id must be a zero-based non-negative integer")
     stem = path.name.split(".", 1)[0].lower()
     domain = DomainCandidate(
         record_id=record_id or f"{stem}_{chain_id}",
@@ -430,6 +433,7 @@ def slice_mmcif(
         chain_id=chain_id,
         domain_id=domain_id or f"{stem}_{chain_id}",
         residue_ranges=residue_ranges,
+        model_id=int(model_id),
         fold_label_final="unlabeled",
         evidence_level="user_input",
         label_source_primary="user_input",
