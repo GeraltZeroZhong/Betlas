@@ -21,10 +21,9 @@ APIs and are not packaged into the PyPI wheel.
 Official input bundles generated here are represented by manifests under
 `assets/` and by package resources consumed through `betlas assets ...`.
 Large CSV/NPZ payloads should be distributed through a release bundle whose
-layout matches the manifest `download_path` values. While packaged manifests
-report `pending_release`, clean clones can run these scripts only with an
-explicit local mirror or already-populated local asset cache; there is no
-default public asset download path.
+contents match the manifest `download_path` values. Clean clones can fetch the
+official bundles with `betlas assets download ...`; offline runs can point
+`BETLAS_ASSET_BASE_URL` at a local mirror.
 
 ## Typical Usage
 
@@ -33,11 +32,13 @@ PYTHONPATH=.:src python scripts/reproducibility/readout_benchmarks/beta_barrel_d
 PYTHONPATH=.:src python scripts/reproducibility/readout_benchmarks/beta_barrel_staves/run_betlas151_layer_radial16_official.py --help
 ```
 
-With a local mirror whose layout matches each manifest `download_path`:
+Download release assets into a local cache:
 
 ```bash
-export BETLAS_ASSET_BASE_URL=/mirror/betlas-assets
 export BETLAS_ASSET_DIR=$PWD/runs/assets
+
+betlas assets download betlas-beta-barrel-detection-official-v1
+betlas assets download betlas-beta-barrel-staves-official-v1
 
 PYTHONPATH=.:src python scripts/reproducibility/readout_benchmarks/beta_barrel_detection/run_betlas151_layer_radial16_official.py \
   --download-assets \
@@ -47,6 +48,9 @@ PYTHONPATH=.:src python scripts/reproducibility/readout_benchmarks/beta_barrel_s
   --download-assets \
   --out-dir runs/readouts/beta_barrel_staves_official
 ```
+
+For an offline mirror, add `export BETLAS_ASSET_BASE_URL=/mirror/betlas-assets`
+before the download commands.
 
 After the assets are already cached:
 

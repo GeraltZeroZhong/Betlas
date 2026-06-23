@@ -1,11 +1,12 @@
 schema_version: betlas.asset-manifest.v1
 asset_id: betlas-beta-barrel-staves-official-v1
-asset_type: official_readout_bundle
+asset_type: fixed_cohort_input_bundle
 readout: beta_barrel_staves
 profile: betlas_151_layer_radial16_inputs
-release_status: pending_release
-bundle: pending-local-mirror.zip
+release_status: released
+bundle: betlas-beta-barrel-staves-official-v1.zip
 bundle_subdir: beta_barrel_staves/official
+manifest_scope: runner_inputs_only
 generated_by:
   - scripts/reproducibility/readout_benchmarks/beta_barrel_staves/run_betlas151_layer_radial16_official.py
 source_inputs:

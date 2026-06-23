@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -94,6 +95,27 @@ def test_asset_download_verify_and_path_use_local_release(tmp_path: Path, monkey
     assert report["files"][0]["expected_sha256"] == report["files"][0]["observed_sha256"]
     assert report["files"][0]["expected_byte_size"] == report["files"][0]["observed_byte_size"]
     assert resolve_asset_path("unit-asset", "tiny.txt", cache_dir=cache_dir) == paths[0]
+
+
+def test_asset_download_falls_back_to_release_zip_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = b"from bundled release asset\n"
+    manifest_root = _write_manifest(tmp_path, asset_id="unit-asset", filename="tiny.txt", data=data)
+    direct_file = tmp_path / "release" / "example" / "official" / "tiny.txt"
+    direct_file.unlink()
+    bundle = tmp_path / "release" / "unit.zip"
+    with zipfile.ZipFile(bundle, "w") as zf:
+        zf.writestr("example/official/tiny.txt", data)
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
+    monkeypatch.setenv("BETLAS_ASSET_BASE_URL", str(tmp_path / "release"))
+
+    paths = download_asset("unit-asset", cache_dir=cache_dir)
+
+    assert paths == (cache_dir / "unit-asset" / "tiny.txt",)
+    assert paths[0].read_bytes() == data
 
 
 def test_asset_download_rejects_hash_and_size_mismatches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -480,14 +502,18 @@ def test_assets_cli_help_and_json_describe(capsys: pytest.CaptureFixture[str]) -
     assert "purpose=" in text
 
 
-def test_pending_official_assets_do_not_advertise_v1_release_bundle() -> None:
+def test_official_assets_advertise_v1_release_bundles() -> None:
+    expected_bundles = {
+        "betlas-beta-barrel-detection-official-v1": "betlas-beta-barrel-detection-official-v1.zip",
+        "betlas-beta-barrel-staves-official-v1": "betlas-beta-barrel-staves-official-v1.zip",
+    }
     for asset_id in (
         "betlas-beta-barrel-detection-official-v1",
         "betlas-beta-barrel-staves-official-v1",
     ):
         manifest = describe_asset(asset_id)
-        assert manifest["release_status"] == "pending_release"
-        assert "betlas-assets-v1.0.0" not in str(manifest["bundle"])
+        assert manifest["release_status"] == "released"
+        assert manifest["bundle"] == expected_bundles[asset_id]
 
 
 def test_staves_official_manifest_covers_runner_required_inputs() -> None:

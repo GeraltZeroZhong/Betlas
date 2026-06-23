@@ -656,8 +656,8 @@ def assets_path_command(args: argparse.Namespace) -> None:
     )
     if args.must_exist and not path.exists():
         raise AssetError(
-            f"asset path does not exist: {path}; use --download with BETLAS_ASSET_BASE_URL=<local mirror> "
-            "or pass --base-url while packaged manifests are pending_release"
+            f"asset path does not exist: {path}; use --download to fetch the released bundle, "
+            "or pass --base-url/BETLAS_ASSET_BASE_URL for a local mirror"
         )
     print(path)
 
@@ -1306,10 +1306,11 @@ def main(argv: list[str] | None = None) -> None:
             "Examples:\n"
             "  betlas assets list\n"
             "  betlas assets describe betlas-beta-barrel-detection-official-v1\n"
-            "  BETLAS_ASSET_BASE_URL=/mirror/betlas-assets betlas assets download betlas-beta-barrel-detection-official-v1\n"
+            "  betlas assets download betlas-beta-barrel-detection-official-v1\n"
+            "  betlas assets download betlas-beta-barrel-staves-official-v1 --base-url /mirror/betlas-assets\n"
             "  betlas assets verify betlas-beta-barrel-detection-official-v1 --strict\n\n"
-            "Pending-release bundles require BETLAS_ASSET_BASE_URL or --base-url pointing at a local mirror; "
-            "BETLAS_ASSET_DIR or ~/.cache/betlas/assets for the local cache."
+            "BETLAS_ASSET_BASE_URL or --base-url can point at a local mirror; BETLAS_ASSET_DIR "
+            "or ~/.cache/betlas/assets controls the local cache."
         ),
     )
     assets_sub = assets.add_subparsers(dest="assets_command", required=True)
@@ -1326,7 +1327,7 @@ def main(argv: list[str] | None = None) -> None:
         description="Download release asset files into the Betlas cache with atomic writes and SHA-256/size verification.",
         epilog=(
             "Examples:\n"
-            "  BETLAS_ASSET_BASE_URL=/mirror/betlas-assets betlas assets download betlas-beta-barrel-staves-official-v1"
+            "  betlas assets download betlas-beta-barrel-staves-official-v1"
             "\n"
             "  betlas assets download betlas-beta-barrel-staves-official-v1 --base-url /mirror/betlas-assets --file betlas_151_chain_features.csv"
         ),
@@ -1336,7 +1337,7 @@ def main(argv: list[str] | None = None) -> None:
     assets_download.add_argument(
         "--base-url",
         default=None,
-        help="Local mirror or released base URL. Pending-release assets require this or BETLAS_ASSET_BASE_URL.",
+        help="Local mirror or released base URL. Defaults to the packaged Betlas release URL.",
     )
     assets_download.add_argument("--file", action="append", default=None, help="Download one file from the bundle; repeat for multiple files.")
     assets_download.add_argument("--force", action="store_true", help="Replace existing cached files after re-downloading and verifying them.")
@@ -1361,7 +1362,7 @@ def main(argv: list[str] | None = None) -> None:
     assets_path.add_argument(
         "--base-url",
         default=None,
-        help="Local mirror or released base URL. Pending-release assets require this or BETLAS_ASSET_BASE_URL.",
+        help="Local mirror or released base URL. Defaults to the packaged Betlas release URL.",
     )
     assets_path.set_defaults(func=assets_path_command)
     assets_esmc = assets_sub.add_parser(
