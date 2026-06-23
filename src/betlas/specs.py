@@ -135,7 +135,7 @@ _COLUMN_OVERRIDES: dict[str, dict[str, str]] = {
     },
     "betlas_topology_status": {
         "dtype": "string",
-        "range": "ok|parse_failed|no_informative_slices|no_rule_score_signal",
+        "range": "ok|parse_failed|no_informative_slices|no_rule_score_signal|missing_topology_geometry",
         "definition": "Status for topology diagnostic rows; ineligible feature rows are status-only and not assigned topology readouts.",
         "missing": "empty string only for older topology diagnostic tables",
     },

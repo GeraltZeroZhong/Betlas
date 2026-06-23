@@ -806,6 +806,8 @@ def run_grouped_benchmark(
             )
     preflight = {
         **base_preflight,
+        "status": "failed" if xgboost_missing_error else "ok",
+        "failure_stage": "dependency" if xgboost_missing_error else "",
         "effective_split_strategy": split_strategy,
         "effective_n_splits": int(n_splits),
         "folds": split_rows,

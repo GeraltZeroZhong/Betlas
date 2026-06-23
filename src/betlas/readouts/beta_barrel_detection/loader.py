@@ -349,7 +349,7 @@ class ProteinLoader:
         _sanitize_blank_chain_ids(self.model)
         _fill_missing_atom_elements(self.model)
 
-        if self._structure_file_type == "MMCIF" and self._has_multichar_chain_ids():
+        if self._has_multichar_chain_ids():
             fd, tmp_path = tempfile.mkstemp(suffix=".cif")
             os.close(fd)
             io = MMCIFIO()

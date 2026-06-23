@@ -4,13 +4,14 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+from dataclasses import asdict, is_dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from hydra.errors import HydraException
 from omegaconf.errors import OmegaConfBaseException
 
-from ...provenance import file_state
+from ...provenance import build_run_manifest, file_state, write_json
 from .bootstrap import configure_thread_environment
 from .config import build_config
 from .constants import DEFAULT_RESULT_COLUMNS, RESULT_ERROR, RESULT_FILTERED_OUT
@@ -19,6 +20,8 @@ from .io.metadata import build_run_metadata, default_metadata_path, write_run_me
 from .io.results import print_results_summary, write_results_csv
 from .pipeline import apply_runtime_overrides, run_pipeline_result
 from .runtime import runtime_summary
+
+READOUT_NAME = "beta-barrel-staves"
 
 
 def _looks_like_hydra_override(token: str) -> bool:
@@ -204,8 +207,14 @@ def _apply_barrel_decisions(
                     "barrel_gate_passed": False,
                     "barrel_gate_result": "MISSING",
                     "barrel_gate_score": 0.0,
-                    "barrel_gate_reason": "No matching beta-barrel detection decision row.",
-                    "reason": "Filtered by barrel decisions: no matching detection row.",
+                    "barrel_gate_reason": (
+                        "No matching beta-barrel detection decision row for exact source_path plus chain."
+                    ),
+                    "reason": (
+                        "Filtered by barrel decisions: no matching detection row for exact "
+                        "source_path plus chain. Rerun detection on the same structure path or "
+                        "provide a decisions CSV with matching source_path values."
+                    ),
                 }
             )
             clear_filtered_count_fields(updated)
@@ -274,6 +283,65 @@ def _write_gated_metadata(
         ),
     }
     write_run_metadata(metadata, metadata_path)
+
+
+def _config_dict(cfg: object) -> dict[str, object]:
+    if is_dataclass(cfg):
+        return asdict(cfg)
+    return dict(cfg)  # pragma: no cover - AppConfig is the supported config type.
+
+
+def _write_gated_manifest(
+    *,
+    cfg: object,
+    result: object,
+    rows: list[dict[str, object]],
+    output_csv: str,
+    barrel_decisions_csv: str,
+) -> Path:
+    output_path = Path(output_csv).expanduser()
+    metadata_path = Path(cfg.output.metadata_path or default_metadata_path(output_csv)).expanduser()
+    input_files = {
+        f"input_{index}": path
+        for index, path in enumerate(getattr(result, "input_files", []))
+    }
+    manifest = build_run_manifest(
+        command="betlas readout beta-barrel-staves",
+        parameters={
+            "barrel_decisions": barrel_decisions_csv,
+            "allow_ungated": False,
+            "workers": getattr(cfg.runtime, "workers", None),
+            "prepare_workers": getattr(cfg.runtime, "prepare_workers", None),
+            "chain": getattr(cfg.input, "chain_id", "") or "",
+        },
+        inputs={
+            **input_files,
+            "barrel_decisions_csv": barrel_decisions_csv,
+        },
+        outputs={
+            "results_csv": output_path,
+            "metadata_json": metadata_path,
+        },
+        config=_config_dict(cfg),
+        metrics={
+            "rows": int(len(rows)),
+            "passed_rows": int(sum(bool(row.get("barrel_gate_passed")) for row in rows)),
+            "filtered_rows": int(
+                sum(str(row.get("result", "")).upper() == RESULT_FILTERED_OUT for row in rows)
+            ),
+            "error_rows": int(sum(str(row.get("result", "")).upper() == RESULT_ERROR for row in rows)),
+        },
+        extra={
+            "readout": READOUT_NAME,
+            "barrel_gate": {
+                "enabled": True,
+                "matching_contract": "exact resolved source_path plus chain",
+                "score_type": "heuristic",
+                "calibration_status": "uncalibrated",
+            },
+        },
+    )
+    return write_json(f"{output_csv}.manifest.json", manifest)
 
 
 def _failure_reason_summary(rows: list[dict[str, object]], *, limit: int = 3) -> str:
@@ -424,6 +492,13 @@ def main(argv: list[str] | None = None) -> None:
             rows = _apply_barrel_decisions(result.raw_rows(), decisions)
             write_results_csv(rows, cfg.output.csv_path)
             _write_gated_metadata(
+                cfg=cfg,
+                result=result,
+                rows=rows,
+                output_csv=cfg.output.csv_path,
+                barrel_decisions_csv=args.barrel_decisions,
+            )
+            _write_gated_manifest(
                 cfg=cfg,
                 result=result,
                 rows=rows,

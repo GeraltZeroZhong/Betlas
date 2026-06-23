@@ -21,7 +21,10 @@ APIs and are not packaged into the PyPI wheel.
 Official input bundles generated here are represented by manifests under
 `assets/` and by package resources consumed through `betlas assets ...`.
 Large CSV/NPZ payloads should be distributed through a release bundle whose
-layout matches the manifest `download_path` values.
+layout matches the manifest `download_path` values. While packaged manifests
+report `pending_release`, clean clones can run these scripts only with an
+explicit local mirror or already-populated local asset cache; there is no
+default public asset download path.
 
 ## Typical Usage
 

@@ -38,6 +38,13 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from betlas.assets import asset_file_report, resolve_asset_path  # noqa: E402
+from betlas.provenance import (  # noqa: E402
+    file_state,
+    git_state,
+    runtime_state,
+    source_tree_state,
+    write_json,
+)
 
 DEFAULT_ALIGNED_DIR = (
     REPO_ROOT
@@ -230,6 +237,92 @@ def load_rows(aligned_dir: Path) -> pd.DataFrame:
     rows["reference_count"] = rows["reference_count"].astype(int)
     rows["outer_fold"] = rows["outer_fold"].astype(int)
     return rows[["record_id", "pdb_id", "auth_chain_id", "reference_count", "outer_fold"]].copy()
+
+
+def _count_dict(values: pd.Series | np.ndarray) -> dict[str, int]:
+    series = pd.Series(values)
+    return {str(k): int(v) for k, v in series.value_counts().sort_index().items()}
+
+
+def build_fold_preflight(rows: pd.DataFrame) -> dict[str, Any]:
+    folds = rows["outer_fold"].astype(int)
+    counts = rows["reference_count"].astype(int)
+    global_count_values = sorted(int(value) for value in counts.unique())
+    leakage_rows: list[dict[str, Any]] = []
+    for pdb_id, part in rows.groupby(rows["pdb_id"].astype(str), dropna=False):
+        fold_values = sorted(int(value) for value in part["outer_fold"].astype(int).unique())
+        if len(fold_values) > 1:
+            leakage_rows.append(
+                {
+                    "pdb_id": str(pdb_id),
+                    "outer_folds": fold_values,
+                    "record_ids": part["record_id"].astype(str).head(8).tolist(),
+                }
+            )
+    duplicate_record_ids = sorted(
+        str(record_id)
+        for record_id, n in rows["record_id"].astype(str).value_counts().items()
+        if int(n) > 1
+    )
+    fold_rows: list[dict[str, Any]] = []
+    failures: list[str] = []
+    warnings: list[str] = []
+    for fold in sorted(int(value) for value in folds.unique()):
+        test_mask = folds == fold
+        train_mask = ~test_mask
+        train_counts = sorted(int(value) for value in counts.loc[train_mask].unique())
+        test_counts = sorted(int(value) for value in counts.loc[test_mask].unique())
+        missing_train = sorted(set(global_count_values) - set(train_counts))
+        missing_test = sorted(set(global_count_values) - set(test_counts))
+        if int(train_mask.sum()) == 0 or int(test_mask.sum()) == 0:
+            failures.append(f"fold {fold}: empty train/test partition")
+        if missing_train:
+            failures.append(f"fold {fold}: train partition lacks reference_count classes {missing_train}")
+        if missing_test:
+            warnings.append(f"fold {fold}: test partition lacks reference_count classes {missing_test}")
+        fold_rows.append(
+            {
+                "outer_fold": fold,
+                "train_rows": int(train_mask.sum()),
+                "test_rows": int(test_mask.sum()),
+                "train_reference_count_classes": train_counts,
+                "test_reference_count_classes": test_counts,
+                "missing_train_reference_count_classes": missing_train,
+                "missing_test_reference_count_classes": missing_test,
+                "train_reference_count_histogram": _count_dict(counts.loc[train_mask]),
+                "test_reference_count_histogram": _count_dict(counts.loc[test_mask]),
+            }
+        )
+    if leakage_rows:
+        failures.append(
+            "pdb_id appears in more than one outer_fold: "
+            + "; ".join(f"{row['pdb_id']}->{row['outer_folds']}" for row in leakage_rows[:8])
+        )
+    if duplicate_record_ids:
+        failures.append(f"duplicate record_id values: {duplicate_record_ids[:8]}")
+    status = "failed" if failures else "ok"
+    return {
+        "schema": "betlas.fixed-cohort-fold-preflight.v1",
+        "status": status,
+        "failure_stage": "fold_contract" if failures else "",
+        "error": "; ".join(failures[:8]),
+        "warnings": warnings,
+        "n_records": int(len(rows)),
+        "outer_folds": sorted(int(value) for value in folds.unique()),
+        "reference_count_classes": global_count_values,
+        "reference_count_histogram": _count_dict(counts),
+        "pdb_fold_leakage": leakage_rows,
+        "duplicate_record_ids": duplicate_record_ids,
+        "folds": fold_rows,
+    }
+
+
+def write_fold_preflight(rows: pd.DataFrame, out_dir: Path) -> dict[str, Any]:
+    preflight = build_fold_preflight(rows)
+    write_json(out_dir / "fold_preflight.json", preflight)
+    if preflight["status"] != "ok":
+        raise ValueError(f"fixed-cohort outer_fold preflight failed: {preflight['error']}")
+    return preflight
 
 
 def load_151(aligned_dir: Path, rows: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -643,6 +736,7 @@ def _main() -> int:
     _validate_inputs(aligned_dir=aligned_dir, layer_values_csv=layer_values_csv)
 
     rows = load_rows(aligned_dir)
+    fold_preflight = write_fold_preflight(rows, out_dir)
     x151, columns151 = load_151(aligned_dir, rows)
     layer, manifest = load_layer_radial16(
         layer_values_csv=layer_values_csv,
@@ -767,7 +861,17 @@ def _main() -> int:
         "probability_max_definition": "Estimator-reported, uncalibrated probability assigned to the predicted stave-count class.",
         "probability_calibration_status": "model_reported_uncalibrated",
         "dependency_preflight": "dependency_preflight.json",
+        "fold_preflight": "fold_preflight.json",
+        "fold_preflight_status": fold_preflight["status"],
         "model_dependency_status": preflight["model_dependency_status"],
+        "inputs": {
+            filename: file_state(aligned_dir / filename)
+            for filename in ALIGNED_ASSET_FILES
+        }
+        | {"layer_values_csv": file_state(layer_values_csv)},
+        "git": git_state(),
+        "source_tree": source_tree_state(),
+        "runtime": runtime_state(),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

@@ -56,7 +56,7 @@ class OutputConfig:
 
 @dataclass
 class BarrelGateConfig:
-    enabled: bool = True
+    enabled: bool = False
     pass_results: list[str] = field(default_factory=lambda: ["BARREL"])
     fail_on_error: bool = True
     overrides: list[str] = field(default_factory=list)

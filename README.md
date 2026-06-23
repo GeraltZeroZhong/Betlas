@@ -85,6 +85,7 @@ betlas readout beta-barrel-staves --check-env
 
 | Data state | Recommended first command | Notes |
 | --- | --- | --- |
+| Unsure which chain/range to use | `betlas structure inspect STRUCTURE.cif` | Lists author/label chain ids, residue counts, sheet/conf availability, and workflow hints for mmCIF inputs. |
 | Annotated mmCIF with `_struct_sheet_range` records | `betlas extract-features --structure STRUCTURE.cif --chain A --out runs/features.csv` | Best path for grammar features and slice evidence. |
 | PDB or AlphaFold-style structure without sheet records | `betlas readout beta-barrel-detection STRUCTURE.pdb --out runs/detection.csv` | DSSP-based readouts can operate on PDB/mmCIF inputs. Grammar extraction expects mmCIF sheet annotations. |
 | CATH source files | `betlas build-dataset --all-eligible --out runs/labels.csv` | Produces labels and grouping columns for benchmarks. If required files are absent from `--cath-dir`, Betlas downloads current CATH daily files; use a pinned local mirror for reproducible release runs. |
@@ -321,9 +322,12 @@ by Biopython/DSSP; use grammar/slice `--model-id` for explicit model-level
 inspection.
 
 The `--barrel-decisions` CSV gate is a conservative post-hoc output gate: the
-staves pipeline still prepares/analyzes rows, then reports non-filtered candidate stave counts
-only for matching detection `BARREL` rows. Detection `ERROR` rows remain error
-status in the gated staves output.
+staves pipeline still prepares/analyzes rows, then reports non-filtered
+candidate stave counts only for detection `BARREL` rows that match by exact
+resolved `source_path` plus chain. A detection CSV produced for a different
+path, such as an mmCIF path when the staves input is a PDB copy, is filtered
+instead of matched by basename. Detection `ERROR` rows remain error status in
+the gated staves output.
 Candidate staves are DSSP-run supported readouts. For stricter exploratory
 staves analysis, use an override such as
 `analyzer.layer.require_geometric_consistency=true`.
@@ -428,8 +432,11 @@ chain_a = detect_beta_barrel_like("structure.cif", overrides=["input.chain_id=A"
 
 ## Assets And Reproducibility
 
-Betlas ships asset manifests in the package. Large payloads are resolved from a
-release or mirror and verified before use.
+Betlas ships asset manifests in the package. Large payloads are verified
+against those manifests before use. Before the official asset payload is
+published, these fixed-cohort workflows require a local mirror whose layout
+matches the manifest `download_path` values; the package does not pretend that
+the pending payload is publicly downloadable.
 
 ```bash
 betlas assets list

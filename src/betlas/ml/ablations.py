@@ -4,6 +4,7 @@ import itertools
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from tqdm import tqdm
 from ..constants import FOLD_LABELS
 from ..provenance import build_run_manifest, write_json
 from ..schema import normalize_feature_columns
+from ..specs import list_feature_specs
 from .benchmark import (
     BENCHMARK_GROUP_COLUMNS,
     BENCHMARK_REQUIRED_COLUMNS,
@@ -96,7 +98,15 @@ def raw_geometry_feature_columns(df: pd.DataFrame) -> list[str]:
     return columns
 
 
+@lru_cache(maxsize=1)
+def _feature_spec_family_by_name() -> dict[str, str]:
+    return {spec.name: spec.family for spec in list_feature_specs()}
+
+
 def feature_group_for(column: str) -> str:
+    spec_family = _feature_spec_family_by_name().get(column)
+    if spec_family:
+        return spec_family
     if column.startswith(("betlas_beta_run_", "betlas_beta_segment_to_run_")):
         return "beta_run_topology"
     if column.startswith("betlas_sheet_pair_"):
@@ -390,6 +400,16 @@ def run_ablation_suite(
     }
     write_json(out_dir / "ablation_preflight.json", preflight)
     if dependency_error:
+        write_json(
+            out_dir / "ablation_preflight.json",
+            {
+                **preflight,
+                "status": "failed",
+                "failure_stage": "dependency",
+                "effective_split_strategy": "not_run_missing_dependency",
+                "error": dependency_error,
+            },
+        )
         raise RuntimeError(dependency_error)
     if missing_group_count:
         write_json(
@@ -454,6 +474,8 @@ def run_ablation_suite(
         out_dir / "ablation_preflight.json",
         {
             **preflight,
+            "status": "ok",
+            "failure_stage": "",
             "effective_split_strategy": split_strategy,
             "effective_n_splits": int(n_splits),
             "folds": _split_summary(splits, df["fold_label_final"], groups),

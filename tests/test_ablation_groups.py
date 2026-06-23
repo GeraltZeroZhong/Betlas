@@ -12,13 +12,25 @@ from betlas.ml.benchmark import (
     run_grouped_benchmark,
 )
 from betlas.ml.splits import make_grouped_splits
+from betlas.specs import list_feature_specs
 
 
 def test_new_boundary_features_are_grouped() -> None:
-    assert feature_group_for("betlas_top2_sheet_order_nonlocal_fraction") == "sheet_sequence_topology"
-    assert feature_group_for("betlas_jelly_roll_order_nonlocal_score") == "sheet_sequence_topology"
-    assert feature_group_for("betlas_contact8_seq_gap_mean") == "contact_graph"
+    assert feature_group_for("betlas_top2_sheet_order_nonlocal_fraction") == "sheet_order_topology"
+    assert feature_group_for("betlas_jelly_roll_order_nonlocal_score") == "sheet_order_topology"
+    assert feature_group_for("betlas_contact8_seq_gap_mean") == "contact_sequence_topology"
     assert feature_group_for("betlas_sheet_pair_bilayer_score") == "sheet_pair_packing"
+    assert feature_group_for("betlas_axis_point_pc1_angular_coverage") == "axis_closure"
+
+
+def test_ablation_feature_groups_follow_public_feature_specs() -> None:
+    mismatches = [
+        (spec.name, spec.family, feature_group_for(spec.name))
+        for spec in list_feature_specs()
+        if feature_group_for(spec.name) != spec.family
+    ]
+
+    assert mismatches == []
 
 
 def test_rule_score_classifier_requires_rule_score_columns() -> None:
@@ -200,7 +212,41 @@ def test_benchmark_grouped_cv_is_structure_disjoint_even_with_unique_cath_groups
     assert set(oof["probability_source"]) == {"predict_proba"}
     assert set(oof["probability_calibration_status"]) == {"model_reported_uncalibrated"}
     preflight = pd.read_json(out_dir / "benchmark_preflight.json", typ="series")
+    assert preflight["status"] == "ok"
     assert preflight["grouping_strategy"] == "connected_components_across_group_columns"
+
+
+def test_ablation_success_preflight_is_marked_ok(tmp_path) -> None:
+    features = tmp_path / "features.csv"
+    out_dir = tmp_path / "ablation_ok"
+    rows = []
+    for group_id in range(2):
+        for idx, label in enumerate(FOLD_LABELS):
+            rows.append(
+                {
+                    "record_id": f"{label}_{group_id}",
+                    "pdb_id": f"p{group_id}{idx}",
+                    "domain_id": f"{label}_{group_id}",
+                    "cath_s35_cluster_id": f"{label}_g{group_id}",
+                    "fold_label_final": label,
+                    "betlas_parse_ok": 1,
+                    "betlas_axis_best_angular_coverage": float(idx + group_id + 1),
+                    "betlas_sheet_pair_bilayer_score": float(idx + 2 * group_id + 1),
+                }
+            )
+    pd.DataFrame(rows).to_csv(features, index=False)
+
+    run_ablation_suite(
+        features,
+        out_dir,
+        n_splits=2,
+        max_group_combo_size=1,
+        config={"model": {"name": "hist_gradient_boosting", "max_iter": 5, "max_leaf_nodes": 3}},
+    )
+
+    preflight = pd.read_json(out_dir / "ablation_preflight.json", typ="series")
+    assert preflight["status"] == "ok"
+    assert preflight["failure_stage"] == ""
 
 
 def test_benchmark_and_ablation_write_failed_preflight_for_invalid_feature_schema(tmp_path) -> None:
@@ -319,4 +365,35 @@ def test_benchmark_writes_preflight_before_xgboost_missing_error(tmp_path, monke
         )
 
     preflight = pd.read_json(out_dir / "benchmark_preflight.json", typ="series")
+    assert preflight["status"] == "failed"
+    assert preflight["failure_stage"] == "dependency"
     assert preflight["model_dependency_status"]["xgboost_tuned"].startswith("unavailable")
+
+
+def test_ablation_writes_dependency_failure_preflight(tmp_path, monkeypatch) -> None:
+    features = tmp_path / "features.csv"
+    out_dir = tmp_path / "ablation_xgboost"
+    rows = []
+    for group_id in range(2):
+        for label in FOLD_LABELS:
+            rows.append(
+                {
+                    "record_id": f"{label}_{group_id}",
+                    "pdb_id": f"p{group_id}{label[:2]}",
+                    "domain_id": f"{label}_{group_id}",
+                    "cath_s35_cluster_id": f"{label}_g{group_id}",
+                    "fold_label_final": label,
+                    "betlas_parse_ok": 1,
+                    "betlas_axis_best_angular_coverage": float(group_id + 1),
+                }
+            )
+    pd.DataFrame(rows).to_csv(features, index=False)
+    monkeypatch.setattr("betlas.ml.ablations._xgboost_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="xgboost"):
+        run_ablation_suite(features, out_dir, n_splits=2, config={"model": {"name": "xgboost"}})
+
+    preflight = pd.read_json(out_dir / "ablation_preflight.json", typ="series")
+    assert preflight["status"] == "failed"
+    assert preflight["failure_stage"] == "dependency"
+    assert preflight["effective_split_strategy"] == "not_run_missing_dependency"

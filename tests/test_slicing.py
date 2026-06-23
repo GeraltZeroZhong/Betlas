@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -282,6 +283,8 @@ def test_extract_features_single_structure_cli_feeds_grammar_score(tmp_path: Pat
     assert row["record_id"] == "mini_A"
     assert row["model_id"] == 0
     assert row["betlas_parse_ok"] == 1
+    manifest = json.loads(features.with_suffix(".csv.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["parameters"]["model_id"] == 0
     assert "Wrote 1 feature row" in capsys.readouterr().out
 
     cli.main(["grammar", "score", "--features", str(features), "--out", str(scores)])
@@ -537,3 +540,50 @@ def test_slice_cli_wrong_chain_reports_user_error(tmp_path: Path, capsys: pytest
     captured = capsys.readouterr()
     assert "Error:" in captured.err
     assert "available author chain ids: A" in captured.err
+
+
+def test_chains_command_rejects_pdb_with_workflow_hint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pdb = tmp_path / "one.pdb"
+    pdb.write_text(
+        "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 20.00           C\nEND\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["chains", str(pdb)])
+
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "supports mmCIF files" in err
+    assert "PDB inputs are supported by DSSP readout commands" in err
+
+
+def test_empty_residue_range_error_mentions_range_and_model(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    structure = tmp_path / "mini.cif"
+    _write_minimal_mmcif(structure)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            [
+                "extract-features",
+                "--structure",
+                str(structure),
+                "--chain",
+                "A",
+                "--residue-ranges",
+                "1000-2000:A",
+                "--out",
+                str(tmp_path / "features.csv"),
+            ]
+        )
+
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "model_id=0" in err
+    assert "residue_ranges='1000-2000:A'" in err

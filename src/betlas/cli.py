@@ -39,13 +39,13 @@ from .features.extract import (
 from .features.rules import missing_or_invalid_rule_inputs
 from .grammars import explain_fold_grammar, get_grammar, list_grammars
 from .io.cath import build_cath_dataset, domain_from_row
-from .io.mmcif import inspect_mmcif_chains
+from .io.mmcif import inspect_mmcif_chains, is_mmcif_path
 from .io.rcsb import download_mmcifs, mmcif_path_for
 from .provenance import build_run_manifest, file_state, write_json
 from .readouts import list_readouts, run_readout
 from .schema import normalize_feature_columns
 from .slicing import SliceConfig, slice_mmcif, summarize_slices
-from .specs import list_feature_specs
+from .specs import list_feature_specs, list_readout_column_specs
 
 
 def _package_version() -> str:
@@ -202,6 +202,7 @@ def extract_features_command(args: argparse.Namespace) -> None:
                     "record_id": args.record_id,
                     "domain_id": args.domain_id,
                     "pdb_id": args.pdb_id,
+                    "model_id": int(args.model_id),
                     "write_failed_row": bool(args.write_failed_row),
                 },
                 inputs={"structure": args.structure},
@@ -359,7 +360,13 @@ def grammar_describe_command(args: argparse.Namespace) -> None:
         print("Column prefixes:")
         for prefix in spec.column_prefixes:
             print(f"  - {prefix}")
-    resolved_columns = [feature.name for feature in list_feature_specs() if spec.matches_column(feature.name)]
+    resolved_columns = sorted(
+        {
+            column_spec.name
+            for column_spec in (*list_feature_specs(), *list_readout_column_specs())
+            if spec.matches_column(column_spec.name)
+        }
+    )
     if resolved_columns:
         print(f"Resolved columns ({len(resolved_columns)}):")
         for column in resolved_columns:
@@ -657,6 +664,12 @@ def examples_copy_command(args: argparse.Namespace) -> None:
 
 def chains_command(args: argparse.Namespace) -> None:
     structure = _require_file(args.path, label="structure")
+    if not is_mmcif_path(structure):
+        raise ValueError(
+            "betlas chains/structure inspect currently supports mmCIF files "
+            "(.cif, .mmcif, .cif.gz, .mmcif.gz). PDB inputs are supported by DSSP readout "
+            "commands, but chain inspection for grammar/slice workflows requires mmCIF."
+        )
     rows = inspect_mmcif_chains(structure)
     if args.format == "json":
         print(json.dumps({"structure": str(structure), "chains": rows}, indent=2, sort_keys=True))
@@ -1157,6 +1170,15 @@ def main(argv: list[str] | None = None) -> None:
     structure_inspect = structure_sub.add_parser(
         "inspect",
         help="Inspect mmCIF author/label chains and annotation availability.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Inspect chains in one mmCIF/mmCIF.gz structure before choosing --chain for Betlas workflows.",
+        epilog=(
+            "Examples:\n"
+            "  betlas structure inspect runs/examples/mini.cif\n"
+            "  betlas structure inspect runs/examples/mini.cif --format json\n\n"
+            "Outputs: author chain id, label chain ids, standard CA residue counts, "
+            "sheet/helix annotation availability, and supported workflow hints."
+        ),
     )
     structure_inspect.add_argument("path", help="Input mmCIF or mmCIF.gz file.")
     structure_inspect.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")

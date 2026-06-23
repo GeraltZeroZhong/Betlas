@@ -14,6 +14,7 @@ import betlas.readouts.beta_barrel_detection.cli as detection_cli
 import betlas.readouts.beta_barrel_detection.pipeline as detection_pipeline
 import betlas.readouts.beta_barrel_staves as staves_api
 import betlas.readouts.beta_barrel_staves.cli as staves_cli
+import betlas.readouts.beta_barrel_staves.readout as staves_readout
 from betlas.ml.benchmark import numeric_feature_columns
 from betlas.readouts import get_readout, list_readouts
 from betlas.readouts.beta_barrel_detection.config import build_config as build_detection_config
@@ -167,6 +168,77 @@ def test_count_beta_barrel_staves_python_api_defaults_do_not_write_current_direc
 
     assert signature.parameters["write_csv"].default is None
     assert signature.parameters["print_summary"].default is False
+
+
+def test_count_beta_barrel_staves_python_api_writes_gated_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "structure.cif"
+    source.write_text("data_unit\n", encoding="utf-8")
+    out_csv = tmp_path / "staves.csv"
+    decisions_csv = tmp_path / "decisions.csv"
+    pd.DataFrame(
+        [
+            {
+                "filename": source.name,
+                "source_path": str(source),
+                "chain": "A",
+                "result": "BARREL",
+                "decision_score": 0.9,
+                "reason": "unit",
+            }
+        ]
+    ).to_csv(decisions_csv, index=False)
+    seen_kwargs: dict[str, object] = {}
+
+    class FakeResult:
+        input_files = [str(source)]
+
+        @staticmethod
+        def raw_rows() -> list[dict[str, object]]:
+            return [
+                {
+                    "filename": source.name,
+                    "source_path": str(source),
+                    "chain": "A",
+                    "result": "COUNTED",
+                    "result_stage": "analysis",
+                    "strand_count": 8,
+                    "confidence": 0.5,
+                    "score_type": "heuristic",
+                    "calibration_status": "uncalibrated",
+                    "config_profile": "native",
+                    "reason": "",
+                }
+            ]
+
+    def fake_run_pipeline_result(*args: object, **kwargs: object) -> FakeResult:
+        seen_kwargs.update(kwargs)
+        return FakeResult()
+
+    monkeypatch.setattr(staves_readout, "run_pipeline_result", fake_run_pipeline_result)
+
+    count_beta_barrel_staves(
+        source,
+        output=out_csv,
+        barrel_decisions=decisions_csv,
+        print_summary=False,
+        workers=1,
+        prepare_workers=1,
+    )
+
+    assert seen_kwargs["show_progress"] is False
+    assert out_csv.exists()
+    metadata_path = out_csv.with_suffix(".csv.metadata.json")
+    manifest_path = Path(f"{out_csv}.manifest.json")
+    assert metadata_path.exists()
+    assert manifest_path.exists()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert metadata["barrel_gate"]["decisions_csv"]["exists"] is True
+    assert manifest["inputs"]["barrel_decisions_csv"]["exists"] is True
+    assert manifest["extra"]["barrel_gate"]["matching_contract"] == "exact resolved source_path plus chain"
 
 
 def test_beta_barrel_staves_compat_api_requires_explicit_ungated() -> None:
@@ -672,6 +744,8 @@ def _topology_row(record_id: str, label: str, **updates: float | str) -> dict[st
         "betlas_axis_best_largest_gap_fraction": 0.24,
         "betlas_axis_best_slice_largest_gap_fraction_mean": 0.32,
         "betlas_barrel_wall_continuity_score": 0.12,
+        "betlas_contact8_cycle_rank_norm": 0.08,
+        "betlas_contact8_degree2_fraction": 0.65,
         "betlas_angular_sector_occupancy12": 0.65,
         "betlas_axis_best_slice_high_coverage_fraction": 0.4,
         "betlas_sheet_seq_top2_interleave_score": 0.1,
@@ -875,6 +949,32 @@ def test_topology_diagnostics_no_informative_slices_rows_are_status_only() -> No
     assert "betlas_score_status" in diagnostics.loc[0, "betlas_topology_error"]
     assert diagnostics.loc[0, "betlas_probability_top1"] == ""
     assert diagnostics.loc[0, "betlas_mixed_topology_score"] == ""
+
+
+def test_topology_diagnostics_rule_score_only_rows_are_status_only() -> None:
+    row = {
+        "record_id": "rules_only",
+        "pdb_id": "rule",
+        "domain_id": "rules_only",
+        "fold_label_final": "beta_barrel",
+        "betlas_parse_ok": 1,
+        "betlas_score_status": "ok",
+        "betlas_top_fold": "beta_barrel",
+        "betlas_rule_score_beta_barrel": 3.0,
+        "betlas_rule_score_beta_prism": 0.0,
+        "betlas_rule_score_beta_propeller": 0.0,
+        "betlas_rule_score_jelly_roll": 0.0,
+        "betlas_rule_score_beta_solenoid": 0.0,
+        "betlas_rule_score_beta_sandwich": 0.0,
+        "betlas_rule_score_tim_like_beta_alpha_barrel": 0.0,
+    }
+
+    diagnostics = compute_topology_diagnostics(pd.DataFrame([row]))
+
+    assert diagnostics.loc[0, "betlas_topology_status"] == "missing_topology_geometry"
+    assert "raw Betlas geometry columns" in diagnostics.loc[0, "betlas_topology_error"]
+    assert diagnostics.loc[0, "betlas_barrel_likeness"] == ""
+    assert diagnostics.loc[0, "betlas_probability_source"] == ""
 
 
 def test_topology_diagnostics_explicit_out_controls_default_manifest_path(tmp_path: Path) -> None:

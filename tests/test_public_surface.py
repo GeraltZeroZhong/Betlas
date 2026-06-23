@@ -337,6 +337,14 @@ def test_topology_alias_help_is_mode_specific(capsys) -> None:
     assert "fixed topology mode" in capsys.readouterr().err
 
 
+def test_grammar_describe_text_resolves_readout_columns(capsys) -> None:
+    cli.main(["grammar", "describe", "continuous_topology"])
+
+    out = capsys.readouterr().out
+    assert "Resolved columns" in out
+    assert "betlas_jelly_rollness" in out
+
+
 def test_public_cli_user_errors_do_not_print_tracebacks(capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["grammar", "describe", "does-not-exist"])

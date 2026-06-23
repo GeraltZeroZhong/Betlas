@@ -24,6 +24,40 @@ READOUT_NAME = "topology-diagnostics"
 DEFAULT_PREDICTIONS_CSV = DEFAULT_RUN_DIR / "oof_predictions.csv"
 DEFAULT_OUTPUT_CSV = Path("runs/readouts/topology_diagnostics/topology_diagnostics.csv")
 
+TOPOLOGY_GEOMETRY_INPUT_COLUMNS = (
+    "betlas_sheet_count",
+    "betlas_sheet_face_count",
+    "betlas_sheet_pair_top2_fraction",
+    "betlas_sheet_pair_size_balance",
+    "betlas_sheet_seq_top2_interleave_score",
+    "betlas_sheet_seq_top2_order_displacement",
+    "betlas_top2_sheet_order_nonlocal_fraction",
+    "betlas_top2_sheet_order_inversion_fraction_mean",
+    "betlas_sheet_seq_greek_key_proxy",
+    "betlas_jelly_roll_order_nonlocal_score",
+    "betlas_beta_run_eight_score",
+    "betlas_sheet_pair_bilayer_score",
+    "betlas_sandwich_lobe_guard_score",
+    "betlas_sheet_pair_face_alignment",
+    "betlas_sheet_pair_normal_abs_dot",
+    "betlas_sheet_pair_cross_contact_density8",
+    "betlas_barrel_wall_continuity_score",
+    "betlas_axis_best_slice_coverage_median",
+    "betlas_axis_best_angular_coverage",
+    "betlas_axis_best_largest_gap_fraction",
+    "betlas_axis_best_slice_largest_gap_fraction_mean",
+    "betlas_contact8_cycle_rank_norm",
+    "betlas_contact8_degree2_fraction",
+    "betlas_angular_sector_occupancy12",
+    "betlas_axis_best_slice_high_coverage_fraction",
+    "betlas_angular_fft_k3_8_max",
+    "betlas_angular_fft_k3_8_best_k",
+    "betlas_axis_periodicity_score",
+    "betlas_pca_elongation",
+    "betlas_beta_alpha_alternation_fraction",
+    "betlas_alpha_shell_radial_delta",
+)
+
 
 def _write_csv_atomic(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -235,6 +269,22 @@ def _rule_scores_from_row(row: pd.Series) -> dict[str, float]:
     return {label: float(parsed.get(label, 0.0) or 0.0) for label in FOLD_LABELS}
 
 
+def _has_finite_input(row: pd.Series, key: str) -> bool:
+    if key not in row.index:
+        return False
+    value = row.get(key, "")
+    if value in {"", None}:
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _missing_topology_geometry_inputs(row: pd.Series) -> list[str]:
+    return [column for column in TOPOLOGY_GEOMETRY_INPUT_COLUMNS if not _has_finite_input(row, column)]
+
+
 def _topology_ineligible_reason(row: pd.Series) -> tuple[str, str] | None:
     parse_ok = int(_f(row, "betlas_parse_ok", default=1.0))
     if "betlas_parse_ok" in row.index and parse_ok != 1:
@@ -253,6 +303,15 @@ def _topology_ineligible_reason(row: pd.Series) -> tuple[str, str] | None:
     scores = _rule_scores_from_row(row)
     if not any(math.isfinite(value) and value != 0.0 for value in scores.values()):
         return ("no_rule_score_signal", "finite nonzero Betlas rule-score signal is unavailable")
+    missing_geometry = _missing_topology_geometry_inputs(row)
+    if missing_geometry:
+        shown = ", ".join(missing_geometry[:8])
+        more = f"; plus {len(missing_geometry) - 8} more" if len(missing_geometry) > 8 else ""
+        return (
+            "missing_topology_geometry",
+            "topology diagnostics require raw Betlas geometry columns from extract-features; "
+            f"missing or non-finite columns: {shown}{more}",
+        )
     return None
 
 

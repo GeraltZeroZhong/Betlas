@@ -155,7 +155,7 @@ SUMMARY_DISPLAY_NAMES = {
     "result": "Result",
     "strand_count": "Strands",
     "confidence": "Conf.",
-    "layer_counts": "Support/Usable/Total",
+    "layer_counts": "Consensus/Usable/Total Layers",
     "candidate_strands": "Candidates",
     "reason": "Reason",
 }

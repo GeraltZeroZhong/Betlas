@@ -995,8 +995,15 @@ def extract_structure_features(
     if not geometry.residues:
         chains = available_auth_chain_ids(path)
         available = ", ".join(chains) if chains else "<none>"
+        range_hint = (
+            f"; requested residue_ranges={residue_ranges!r}. If ranges include chain suffixes, "
+            f"they must select residues from --chain {chain_id!r}"
+            if str(residue_ranges).strip()
+            else ""
+        )
         raise ValueError(
-            f"no residues were selected for chain {chain_id!r}; available author chain ids: {available}"
+            f"no residues were selected for chain {chain_id!r} in model_id={int(model_id)}{range_hint}; "
+            f"available author chain ids: {available}"
         )
     if not geometry.beta_segments:
         warnings = "; ".join(geometry.warnings) if geometry.warnings else "no beta-sheet segments"

@@ -43,11 +43,17 @@ def count_beta_barrel_staves(
             cfg,
             write_csv=should_write_csv,
             print_summary=print_summary,
+            show_progress=bool(print_summary),
             strict_input=True,
             raise_on_all_prepare_failures=True,
         )
 
-    from .cli import _apply_barrel_decisions, _load_barrel_decisions
+    from .cli import (
+        _apply_barrel_decisions,
+        _load_barrel_decisions,
+        _write_gated_manifest,
+        _write_gated_metadata,
+    )
     from .io.results import print_results_summary, write_results_csv
 
     decisions = _load_barrel_decisions(str(barrel_decisions))
@@ -55,6 +61,7 @@ def count_beta_barrel_staves(
         cfg,
         write_csv=False,
         print_summary=False,
+        show_progress=bool(print_summary),
         strict_input=True,
         raise_on_all_prepare_failures=False,
     )
@@ -62,6 +69,20 @@ def count_beta_barrel_staves(
     output_path = cfg.output.csv_path if should_write_csv else None
     if should_write_csv:
         write_results_csv(rows, cfg.output.csv_path)
+        _write_gated_metadata(
+            cfg=cfg,
+            result=result,
+            rows=rows,
+            output_csv=cfg.output.csv_path,
+            barrel_decisions_csv=str(barrel_decisions),
+        )
+        _write_gated_manifest(
+            cfg=cfg,
+            result=result,
+            rows=rows,
+            output_csv=cfg.output.csv_path,
+            barrel_decisions_csv=str(barrel_decisions),
+        )
     if print_summary:
         print_results_summary(
             rows,

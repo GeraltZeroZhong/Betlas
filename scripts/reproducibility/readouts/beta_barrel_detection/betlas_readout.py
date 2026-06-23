@@ -670,6 +670,103 @@ def _coerce_numeric_frame(frame: pd.DataFrame, columns: list[str]) -> pd.DataFra
     return out.astype(float)
 
 
+def _class_count_dict(values: pd.Series | np.ndarray) -> dict[str, int]:
+    series = pd.Series(values)
+    return {str(k): int(v) for k, v in series.value_counts().sort_index().items()}
+
+
+def write_split_preflight(
+    *,
+    out_dir: Path,
+    y: np.ndarray,
+    groups: np.ndarray,
+    n_splits: int,
+    seed: int,
+) -> dict[str, Any]:
+    group_series = pd.Series(groups).astype(str)
+    missing_groups = sorted(group_series[group_series.str.strip() == ""].index.astype(int).tolist())
+    required_classes = [0, 1]
+    missing_classes = sorted(set(required_classes) - set(int(value) for value in np.unique(y)))
+    base = {
+        "schema": "betlas.fixed-cohort-split-preflight.v1",
+        "n_records": int(len(y)),
+        "requested_n_splits": int(n_splits),
+        "random_state": int(seed),
+        "group_column": "pdb_id",
+        "group_count": int(group_series.nunique()),
+        "missing_group_row_examples": missing_groups[:8],
+        "required_classes": required_classes,
+        "class_counts": _class_count_dict(y),
+        "missing_global_classes": missing_classes,
+        "effective_split_strategy": "not_run",
+        "effective_n_splits": 0,
+        "folds": [],
+    }
+    if missing_groups:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "group_coverage",
+            "error": f"fixed-cohort detection rows missing pdb_id groups: {missing_groups[:8]}",
+        }
+        write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise ValueError(preflight["error"])
+    if missing_classes:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "class_coverage",
+            "error": f"fixed-cohort detection requires both binary classes; missing {missing_classes}",
+        }
+        write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise ValueError(preflight["error"])
+    try:
+        splits, split_strategy, effective_splits = make_grouped_splits(
+            pd.DataFrame({"row": np.arange(len(y))}),
+            y,
+            groups,
+            n_splits=int(n_splits),
+            random_state=int(seed),
+        )
+    except ValueError as exc:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "split_coverage",
+            "effective_split_strategy": "split_failed",
+            "error": str(exc),
+            "split_error": str(exc),
+        }
+        write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise
+    fold_rows: list[dict[str, Any]] = []
+    for fold, (train_index, test_index) in enumerate(splits):
+        train_groups = set(group_series.iloc[train_index])
+        test_groups = set(group_series.iloc[test_index])
+        overlap = sorted(train_groups & test_groups)
+        fold_rows.append(
+            {
+                "outer_fold": int(fold),
+                "train_rows": int(len(train_index)),
+                "test_rows": int(len(test_index)),
+                "train_class_counts": _class_count_dict(y[train_index]),
+                "test_class_counts": _class_count_dict(y[test_index]),
+                "group_overlap_count": int(len(overlap)),
+                "group_overlap_examples": overlap[:8],
+            }
+        )
+    preflight = {
+        **base,
+        "status": "ok",
+        "failure_stage": "",
+        "effective_split_strategy": split_strategy,
+        "effective_n_splits": int(effective_splits),
+        "folds": fold_rows,
+    }
+    write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+    return preflight
+
+
 def load_esmc_embeddings(path: Path, record_ids: list[str]) -> tuple[pd.DataFrame, pd.Series] | None:
     if not path.exists():
         return None
@@ -977,6 +1074,13 @@ def run_official_detection_readout(
     layer_x = _coerce_numeric_frame(metric_layer_values, layer_columns)
     y = metric_cohort["y_true"].to_numpy(dtype=int)
     groups = metric_cohort["pdb_id"].astype(str).to_numpy()
+    split_preflight = write_split_preflight(
+        out_dir=paths.out_dir,
+        y=y,
+        groups=groups,
+        n_splits=int(n_splits),
+        seed=int(seed),
+    )
 
     specs = [
         ("betlas_151_catboost", "Betlas 151", x151, None, False),
@@ -1085,6 +1189,8 @@ def run_official_detection_readout(
         "asset_cache_dir": display_path(paths.asset_cache_dir) if paths.asset_cache_dir is not None else "",
         "asset_manifest_verification": paths.asset_manifest_verification or {},
         "dependency_preflight": "dependency_preflight.json",
+        "split_preflight": "fixed_cohort_split_preflight.json",
+        "split_preflight_status": split_preflight["status"],
         "model_dependency_status": dependency_preflight["model_dependency_status"],
         "probability_calibration_status": "model_reported_uncalibrated",
         "cohort_csv": display_path(paths.cohort_csv) if paths.cohort_csv else "",

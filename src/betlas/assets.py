@@ -397,6 +397,16 @@ def verify_asset(
                 )
             errors.append(f"{filename}: {reason} ({hint})")
     if strict and errors:
+        if len(errors) > 1 and str(manifest.get("release_status", "")).strip().lower() == _PENDING_RELEASE_STATUS:
+            first_errors = "; ".join(errors[:3])
+            more = f"; plus {len(errors) - 3} more file(s)" if len(errors) > 3 else ""
+            raise AssetError(
+                f"asset {asset_id} verification failed for {len(errors)} file(s) in cache={root}; "
+                "asset is pending_release, populate the cache with "
+                f"`betlas assets download {manifest.get('asset_id', '<asset>')} --base-url <local mirror>` "
+                f"or set {ASSET_BASE_URL_ENV} for that download first. First failures: "
+                f"{first_errors}{more}"
+            )
         raise AssetError("; ".join(errors))
     return results
 
