@@ -39,7 +39,14 @@ flowchart LR
 
 ## Install
 
-Current development builds are best used from a source checkout:
+Install the released package from PyPI:
+
+```bash
+python -m pip install betlas
+betlas --help
+```
+
+For source checkouts and local development:
 
 ```bash
 python -m venv .venv
@@ -61,10 +68,6 @@ python -m pip install build
 python -m build
 python -m pip install dist/betlas-1.0.0-py3-none-any.whl
 ```
-
-Future tagged releases may also be installed from PyPI with
-`python -m pip install betlas`. Until that release is published, use a source
-install or a local wheel from this checkout.
 
 Runtime requirements:
 
