@@ -18,7 +18,7 @@ from tqdm import tqdm
 from betlas.features.extract import assert_no_diagnostic_label_leakage, extract_feature_row
 from betlas.ml.splits import make_grouped_splits
 from betlas.models import DomainCandidate
-from betlas.provenance import file_state, runtime_state, write_json
+from betlas.provenance import file_state, git_state, runtime_state, source_tree_state, write_json
 from betlas.schema import canonical_feature_name, normalize_feature_columns
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -181,6 +181,10 @@ def _align_cached_frame(
     return aligned.sort_values("_order").drop(columns=["_order"]).reset_index(drop=True)
 
 
+def _canonical_pdb_groups(values: pd.Series | np.ndarray | list[str]) -> np.ndarray:
+    return pd.Series(values).astype(str).str.strip().str.upper().to_numpy()
+
+
 def _safe_chain(value: object) -> str:
     text = str(value).strip()
     return "" if text.lower() in {"", "nan", "none"} else text
@@ -233,7 +237,7 @@ def build_detection_cohort(paths: ReadoutPaths) -> pd.DataFrame:
             {"1", "true", "yes"}
         )
         cohort["y_true"] = pd.to_numeric(cohort["y_true"], errors="raise").astype(int)
-        cohort["pdb_id"] = cohort["pdb_id"].astype(str).str.upper()
+        cohort["pdb_id"] = cohort["pdb_id"].astype(str).str.strip().str.upper()
         cohort["structure_exists"] = cohort["structure_path"].astype(str).map(lambda item: Path(item).exists())
         if cohort["record_id"].astype(str).duplicated().any():
             raise ValueError(f"Duplicate record_id values in benchmark cohort: {paths.cohort_csv}")
@@ -683,7 +687,7 @@ def write_split_preflight(
     n_splits: int,
     seed: int,
 ) -> dict[str, Any]:
-    group_series = pd.Series(groups).astype(str)
+    group_series = pd.Series(groups).astype(str).str.strip().str.upper()
     missing_groups = sorted(group_series[group_series.str.strip() == ""].index.astype(int).tolist())
     required_classes = [0, 1]
     missing_classes = sorted(set(required_classes) - set(int(value) for value in np.unique(y)))
@@ -724,7 +728,7 @@ def write_split_preflight(
         splits, split_strategy, effective_splits = make_grouped_splits(
             pd.DataFrame({"row": np.arange(len(y))}),
             y,
-            groups,
+            group_series.to_numpy(),
             n_splits=int(n_splits),
             random_state=int(seed),
         )
@@ -740,10 +744,22 @@ def write_split_preflight(
         write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
         raise
     fold_rows: list[dict[str, Any]] = []
+    fold_failures: list[str] = []
+    required_class_set = set(required_classes)
     for fold, (train_index, test_index) in enumerate(splits):
         train_groups = set(group_series.iloc[train_index])
         test_groups = set(group_series.iloc[test_index])
         overlap = sorted(train_groups & test_groups)
+        train_classes = set(int(value) for value in np.unique(y[train_index]))
+        test_classes = set(int(value) for value in np.unique(y[test_index]))
+        missing_train = sorted(required_class_set - train_classes)
+        missing_test = sorted(required_class_set - test_classes)
+        if overlap:
+            fold_failures.append(f"fold {fold}: group leakage for pdb_id values {overlap[:8]}")
+        if missing_train:
+            fold_failures.append(f"fold {fold}: train partition lacks classes {missing_train}")
+        if missing_test:
+            fold_failures.append(f"fold {fold}: test partition lacks classes {missing_test}")
         fold_rows.append(
             {
                 "outer_fold": int(fold),
@@ -751,10 +767,24 @@ def write_split_preflight(
                 "test_rows": int(len(test_index)),
                 "train_class_counts": _class_count_dict(y[train_index]),
                 "test_class_counts": _class_count_dict(y[test_index]),
+                "missing_train_classes": missing_train,
+                "missing_test_classes": missing_test,
                 "group_overlap_count": int(len(overlap)),
                 "group_overlap_examples": overlap[:8],
             }
         )
+    if fold_failures:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "split_coverage",
+            "effective_split_strategy": split_strategy,
+            "effective_n_splits": int(effective_splits),
+            "folds": fold_rows,
+            "error": "; ".join(fold_failures[:8]),
+        }
+        write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise ValueError(preflight["error"])
     preflight = {
         **base,
         "status": "ok",
@@ -775,6 +805,9 @@ def load_esmc_embeddings(path: Path, record_ids: list[str]) -> tuple[pd.DataFram
     if not id_key or "embeddings" not in loaded.files:
         raise ValueError(f"ESM-C cache must contain record_id/sample_id and embeddings arrays: {path}")
     ids = [str(value) for value in loaded[id_key].tolist()]
+    if len(set(ids)) != len(ids):
+        dupes = pd.Series(ids)[pd.Series(ids).duplicated()].head(8).tolist()
+        raise ValueError(f"ESM-C cache contains duplicate record_id values: {dupes}")
     embeddings = pd.DataFrame(loaded["embeddings"], index=ids)
     missing = sorted(set(record_ids) - set(ids))
     if missing:
@@ -1073,7 +1106,7 @@ def run_official_detection_readout(
     layer_columns = layer_manifest["feature"].astype(str).tolist()
     layer_x = _coerce_numeric_frame(metric_layer_values, layer_columns)
     y = metric_cohort["y_true"].to_numpy(dtype=int)
-    groups = metric_cohort["pdb_id"].astype(str).to_numpy()
+    groups = _canonical_pdb_groups(metric_cohort["pdb_id"])
     split_preflight = write_split_preflight(
         out_dir=paths.out_dir,
         y=y,
@@ -1214,6 +1247,8 @@ def run_official_detection_readout(
         "pipeline_runtime_seconds": round(time.perf_counter() - run_start, 3),
         "inputs": input_state,
         "runtime": runtime_state(),
+        "git": git_state(),
+        "source_tree": source_tree_state(),
     }
     write_json(paths.out_dir / "metadata.json", metadata)
     return metadata

@@ -261,7 +261,7 @@ def _connected_group_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Se
     for column in columns:
         if column not in df:
             continue
-        values = df[column].astype(str).str.strip().reset_index(drop=True)
+        values = df[column].astype(str).str.strip().str.upper().reset_index(drop=True)
         for index, value in enumerate(values):
             if not value:
                 continue
@@ -829,6 +829,20 @@ def run_grouped_benchmark(
     ):
         models["xgboost_tuned"] = "TUNED_XGBOOST"
     if not models:
+        error = "benchmark config did not enable any available models"
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **preflight,
+                "status": "failed",
+                "failure_stage": "dependency",
+                "error": error,
+                "model_dependency_status": {
+                    **model_status,
+                    **{model: "skipped_or_disabled" for model in sorted(include) if model not in model_status},
+                },
+            },
+        )
         raise ValueError("benchmark config did not enable any available models")
     model_feature_columns = {
         model_name: list(RULE_SCORE_COLUMNS) if model_name == "grammar_rules" else list(feature_cols)

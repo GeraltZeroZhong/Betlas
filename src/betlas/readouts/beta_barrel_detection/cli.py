@@ -13,12 +13,15 @@ if __package__ in {None, ""}:  # pragma: no cover - path execution convenience
     from betlas.readouts.beta_barrel_detection.bootstrap import configure_thread_environment
     from betlas.readouts.beta_barrel_detection.config import build_config
     from betlas.readouts.beta_barrel_detection.exceptions import BetlasBetaError
-    from betlas.readouts.beta_barrel_detection.runtime import runtime_summary
+    from betlas.readouts.beta_barrel_detection.runtime import (
+        dssp_requirement_message,
+        runtime_summary,
+    )
 else:
     from .bootstrap import configure_thread_environment
     from .config import build_config
     from .exceptions import BetlasBetaError
-    from .runtime import runtime_summary
+    from .runtime import dssp_requirement_message, runtime_summary
 
 
 def _looks_like_hydra_override(token: str) -> bool:
@@ -185,6 +188,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Python: {summary['python']} ({summary['python_executable']})")
             print(f"DSSP: {summary['dssp']}")
             if summary["dssp"] == "not found":
+                print(dssp_requirement_message(), file=sys.stderr)
                 raise SystemExit(2)
             return
 

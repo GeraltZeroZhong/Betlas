@@ -775,19 +775,22 @@ def prepare_one_file(file_path: str, cfg: AppConfig) -> list[dict[str, object]] 
     seen_chains: list[str] = []
     for chain in loader.model:
         chain_id = chain.id
-        seen_chains.append(str(chain_id))
-        if requested_chain and str(chain_id) != requested_chain:
-            continue
         try:
             residues_data = loader.get_chain_data(chain_id)
         except Exception as exc:
             return PrepareFailure(f"{source_path}: {exc}")
+        effective_chain_id = str(chain_id)
+        if residues_data:
+            effective_chain_id = str(residues_data[0].get("chain", chain_id))
+        seen_chains.append(effective_chain_id)
+        if requested_chain and requested_chain not in {str(chain_id), effective_chain_id}:
+            continue
 
         payloads.append(
             {
                 "filename": filename,
                 "source_path": source_path,
-                "chain": chain_id,
+                "chain": effective_chain_id,
                 "dssp_status": "error" if loader.secondary_structure_error else "ok",
                 "dssp_error": loader.secondary_structure_error or "",
                 "residues_data": residues_data,

@@ -14,11 +14,14 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import matthews_corrcoef
 from sklearn.preprocessing import StandardScaler
 
+from betlas.assets import resolve_asset_path
 from betlas.ml.splits import make_grouped_splits
+from betlas.provenance import file_state, git_state, runtime_state, source_tree_state
 
 DEFAULT_BENCHMARK_DIR = Path("data/readouts/beta_barrel_detection/full_mpstruc_767_neg800")
 DEFAULT_INPUT_DIR = DEFAULT_BENCHMARK_DIR / "betlas_151_layer_radial16_official"
 DEFAULT_OUT_DIR = DEFAULT_BENCHMARK_DIR / "feature_block_ablation_catboost"
+DEFAULT_ASSET_ID = "betlas-beta-barrel-detection-official-v1"
 
 
 def _require_file(path: Path, *, label: str) -> Path:
@@ -61,6 +64,166 @@ def write_dependency_preflight(out_dir: Path) -> dict[str, Any]:
             "feature-block ablation requires CatBoost; install the reproducibility environment "
             "or run `python -m pip install catboost` first"
         )
+    return preflight
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _class_count_dict(values: pd.Series | np.ndarray) -> dict[str, int]:
+    series = pd.Series(values)
+    return {str(k): int(v) for k, v in series.value_counts().sort_index().items()}
+
+
+def _canonical_pdb_groups(values: pd.Series | np.ndarray | list[str]) -> np.ndarray:
+    return pd.Series(values).astype(str).str.strip().str.upper().to_numpy()
+
+
+def _align_record_frame(
+    frame: pd.DataFrame,
+    record_ids: list[str],
+    *,
+    path: Path,
+    frame_name: str,
+) -> pd.DataFrame:
+    if "record_id" not in frame.columns:
+        raise ValueError(f"{frame_name} lacks `record_id`: {path}")
+    source_ids = frame["record_id"].astype(str)
+    if source_ids.duplicated().any():
+        dupes = source_ids.loc[source_ids.duplicated()].head(8).tolist()
+        raise ValueError(f"{frame_name} contains duplicate record_id values: {dupes}")
+    if len(set(record_ids)) != len(record_ids):
+        dupes = pd.Series(record_ids)[pd.Series(record_ids).duplicated()].head(8).tolist()
+        raise ValueError(f"cohort contains duplicate record_id values: {dupes}")
+    missing = sorted(set(record_ids) - set(source_ids))
+    extra = sorted(set(source_ids) - set(record_ids))
+    if missing or extra:
+        raise ValueError(
+            f"{frame_name} record_id set does not match cohort "
+            f"(missing={missing[:8]}, extra={extra[:8]}): {path}"
+        )
+    aligned = frame.copy()
+    aligned["record_id"] = source_ids
+    return aligned.set_index("record_id").loc[record_ids].reset_index()
+
+
+def write_split_preflight(
+    *,
+    out_dir: Path,
+    y: np.ndarray,
+    groups: np.ndarray,
+    n_splits: int,
+    seed: int,
+) -> dict[str, Any]:
+    group_series = pd.Series(groups).astype(str).str.strip().str.upper()
+    missing_groups = sorted(group_series[group_series.str.strip() == ""].index.astype(int).tolist())
+    required_classes = [0, 1]
+    required_class_set = set(required_classes)
+    missing_classes = sorted(required_class_set - set(int(value) for value in np.unique(y)))
+    base = {
+        "schema": "betlas.fixed-cohort-split-preflight.v1",
+        "n_records": int(len(y)),
+        "requested_n_splits": int(n_splits),
+        "random_state": int(seed),
+        "group_column": "pdb_id",
+        "group_count": int(group_series.nunique()),
+        "missing_group_row_examples": missing_groups[:8],
+        "required_classes": required_classes,
+        "class_counts": _class_count_dict(y),
+        "missing_global_classes": missing_classes,
+        "effective_split_strategy": "not_run",
+        "effective_n_splits": 0,
+        "folds": [],
+    }
+    if missing_groups:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "group_coverage",
+            "error": f"fixed-cohort detection rows missing pdb_id groups: {missing_groups[:8]}",
+        }
+        _write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise ValueError(preflight["error"])
+    if missing_classes:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "class_coverage",
+            "error": f"fixed-cohort detection requires both binary classes; missing {missing_classes}",
+        }
+        _write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise ValueError(preflight["error"])
+    try:
+        splits, split_strategy, effective_splits = make_grouped_splits(
+            pd.DataFrame({"row": np.arange(len(y))}),
+            y,
+            group_series.to_numpy(),
+            n_splits=int(n_splits),
+            random_state=int(seed),
+        )
+    except ValueError as exc:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "split_coverage",
+            "effective_split_strategy": "split_failed",
+            "error": str(exc),
+            "split_error": str(exc),
+        }
+        _write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise
+    fold_rows: list[dict[str, Any]] = []
+    fold_failures: list[str] = []
+    for fold, (train_index, test_index) in enumerate(splits):
+        train_groups = set(group_series.iloc[train_index])
+        test_groups = set(group_series.iloc[test_index])
+        overlap = sorted(train_groups & test_groups)
+        train_classes = set(int(value) for value in np.unique(y[train_index]))
+        test_classes = set(int(value) for value in np.unique(y[test_index]))
+        missing_train = sorted(required_class_set - train_classes)
+        missing_test = sorted(required_class_set - test_classes)
+        if overlap:
+            fold_failures.append(f"fold {fold}: group leakage for pdb_id values {overlap[:8]}")
+        if missing_train:
+            fold_failures.append(f"fold {fold}: train partition lacks classes {missing_train}")
+        if missing_test:
+            fold_failures.append(f"fold {fold}: test partition lacks classes {missing_test}")
+        fold_rows.append(
+            {
+                "outer_fold": int(fold),
+                "train_rows": int(len(train_index)),
+                "test_rows": int(len(test_index)),
+                "train_class_counts": _class_count_dict(y[train_index]),
+                "test_class_counts": _class_count_dict(y[test_index]),
+                "missing_train_classes": missing_train,
+                "missing_test_classes": missing_test,
+                "group_overlap_count": int(len(overlap)),
+                "group_overlap_examples": overlap[:8],
+            }
+        )
+    if fold_failures:
+        preflight = {
+            **base,
+            "status": "failed",
+            "failure_stage": "split_coverage",
+            "effective_split_strategy": split_strategy,
+            "effective_n_splits": int(effective_splits),
+            "folds": fold_rows,
+            "error": "; ".join(fold_failures[:8]),
+        }
+        _write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
+        raise ValueError(preflight["error"])
+    preflight = {
+        **base,
+        "status": "ok",
+        "failure_stage": "",
+        "effective_split_strategy": split_strategy,
+        "effective_n_splits": int(effective_splits),
+        "folds": fold_rows,
+    }
+    _write_json(out_dir / "fixed_cohort_split_preflight.json", preflight)
     return preflight
 
 
@@ -151,6 +314,12 @@ def _load_esmc(
     start = time.perf_counter()
     loaded = np.load(path, allow_pickle=False)
     ids = [str(value) for value in loaded["record_id"].tolist()]
+    if len(set(ids)) != len(ids):
+        dupes = pd.Series(ids)[pd.Series(ids).duplicated()].head(8).tolist()
+        raise ValueError(f"ESM-C embedding cache contains duplicate record_id values: {dupes}")
+    missing = sorted(set(record_ids) - set(ids))
+    if missing:
+        raise ValueError(f"ESM-C embedding cache is missing record ids: {missing[:8]}")
     embeddings = pd.DataFrame(loaded["embeddings"], index=ids).loc[record_ids]
     if "esmc_available" in loaded.files:
         available = pd.Series(loaded["esmc_available"].astype(float), index=ids).loc[record_ids]
@@ -220,19 +389,35 @@ def run_ablation(
     cohort = pd.read_csv(benchmark_dir / "benchmark_cohort.csv")
     cohort = cohort.loc[cohort["include_for_metrics"].map(_boolish)].reset_index(drop=True)
     y = cohort["y_true"].to_numpy(dtype=int)
-    groups = cohort["pdb_id"].astype(str).to_numpy()
+    record_ids = cohort["record_id"].astype(str).tolist()
+    groups = _canonical_pdb_groups(cohort["pdb_id"])
+    split_preflight = write_split_preflight(
+        out_dir=out_dir,
+        y=y,
+        groups=groups,
+        n_splits=int(n_splits),
+        seed=int(seed),
+    )
 
     feature_columns = pd.read_csv(input_dir / "feature_columns_151.csv")["feature"].astype(str).tolist()
     feature_rows = pd.read_csv(input_dir / "betlas_151_chain_features.csv")
-    feature_rows["record_id"] = feature_rows["record_id"].astype(str)
-    feature_rows = feature_rows.set_index("record_id").loc[cohort["record_id"].astype(str)].reset_index()
+    feature_rows = _align_record_frame(
+        feature_rows,
+        record_ids,
+        path=input_dir / "betlas_151_chain_features.csv",
+        frame_name="Betlas 151 chain feature table",
+    )
     x151 = _numeric_frame(feature_rows, feature_columns)
 
     layer_manifest = pd.read_csv(input_dir / "layer_radial16_feature_manifest.csv")
     layer_columns = layer_manifest["feature"].astype(str).tolist()
     layer_rows = pd.read_csv(input_dir / "layer_radial16_feature_values.csv")
-    layer_rows["record_id"] = layer_rows["record_id"].astype(str)
-    layer_rows = layer_rows.set_index("record_id").loc[cohort["record_id"].astype(str)].reset_index()
+    layer_rows = _align_record_frame(
+        layer_rows,
+        record_ids,
+        path=input_dir / "layer_radial16_feature_values.csv",
+        frame_name="LayerRadial16 feature table",
+    )
     layer = _numeric_frame(layer_rows, layer_columns)
 
     splits, split_strategy, effective_splits = make_grouped_splits(
@@ -248,7 +433,7 @@ def run_ablation(
 
     train_pcs, test_pcs, esmc_available, esmc_dim, esmc_prepare_runtime = _load_esmc(
         input_dir / "esmc_mean_embeddings_aligned.npz",
-        cohort["record_id"].astype(str).tolist(),
+        record_ids,
         fold_ids,
         pca_dim=int(pca_dim),
         seed=int(seed),
@@ -370,6 +555,7 @@ def run_ablation(
     fold_df.to_csv(out_dir / "feature_block_ablation_fold_metrics.csv", index=False)
     per_record_df.to_csv(out_dir / "feature_block_ablation_per_record_predictions.csv", index=False)
     metadata = {
+        "schema": "betlas.beta-barrel-detection.feature-block-ablation.v1",
         "benchmark_dir": str(benchmark_dir),
         "input_dir": str(input_dir),
         "out_dir": str(out_dir),
@@ -382,12 +568,32 @@ def run_ablation(
         "n_splits": int(n_splits),
         "effective_n_splits": int(effective_splits),
         "split_strategy": split_strategy,
+        "split_preflight": "fixed_cohort_split_preflight.json",
+        "split_preflight_status": split_preflight["status"],
         "probability_alignment_warnings": probability_warnings,
         "dependency_preflight": "dependency_preflight.json",
         "model_dependency_status": dependency_preflight["model_dependency_status"],
         "probability_calibration_status": "model_reported_uncalibrated",
         "esmc_pca_dim": int(esmc_dim),
         "shared_esmc_prepare_runtime_seconds": round(esmc_prepare_runtime, 3),
+        "inputs": {
+            "benchmark_cohort_csv": file_state(benchmark_dir / "benchmark_cohort.csv"),
+            "feature_columns_151_csv": file_state(input_dir / "feature_columns_151.csv"),
+            "betlas_151_chain_features_csv": file_state(input_dir / "betlas_151_chain_features.csv"),
+            "layer_radial16_feature_manifest_csv": file_state(input_dir / "layer_radial16_feature_manifest.csv"),
+            "layer_radial16_feature_values_csv": file_state(input_dir / "layer_radial16_feature_values.csv"),
+            "esmc_mean_embeddings_aligned_npz": file_state(input_dir / "esmc_mean_embeddings_aligned.npz"),
+        },
+        "outputs": {
+            "summary_csv": file_state(out_dir / "feature_block_ablation_summary.csv"),
+            "fold_metrics_csv": file_state(out_dir / "feature_block_ablation_fold_metrics.csv"),
+            "per_record_predictions_csv": file_state(out_dir / "feature_block_ablation_per_record_predictions.csv"),
+            "dependency_preflight_json": file_state(out_dir / "dependency_preflight.json"),
+            "split_preflight_json": file_state(out_dir / "fixed_cohort_split_preflight.json"),
+        },
+        "runtime": runtime_state(),
+        "git": git_state(),
+        "source_tree": source_tree_state(),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     (out_dir / "feature_block_ablation_metadata.json").write_text(
@@ -408,9 +614,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "  --input-dir/layer_radial16_feature_manifest.csv\n"
             "  --input-dir/layer_radial16_feature_values.csv\n"
             "  --input-dir/esmc_mean_embeddings_aligned.npz\n\n"
+            "Clean clones can pass --asset-id betlas-beta-barrel-detection-official-v1 after caching, or "
+            "--download-assets with --asset-base-url/BETLAS_ASSET_BASE_URL pointing to a local mirror while "
+            "the packaged manifest is pending_release.\n\n"
             "Outputs: feature_block_ablation_summary.csv, fold metrics, per-record predictions, metadata JSON."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--asset-id",
+        default=None,
+        help=(
+            "Optional Betlas asset id used to resolve benchmark/input files from the local asset cache. "
+            f"Defaults to {DEFAULT_ASSET_ID!r} when --download-assets is set."
+        ),
+    )
+    parser.add_argument("--asset-cache-dir", type=Path, default=None, help="Optional Betlas asset cache directory.")
+    parser.add_argument(
+        "--download-assets",
+        action="store_true",
+        help="Download and verify selected asset files before running. Pending assets require a local mirror.",
+    )
+    parser.add_argument(
+        "--asset-base-url",
+        default=None,
+        help="Local mirror base URL/path used with --download-assets while packaged manifests are pending_release.",
     )
     parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_DIR)
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)
@@ -425,9 +653,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def _main() -> int:
     args = build_arg_parser().parse_args()
+    benchmark_dir = args.benchmark_dir.expanduser()
+    input_dir = args.input_dir.expanduser()
+    if args.asset_id or args.download_assets:
+        asset_id = args.asset_id or DEFAULT_ASSET_ID
+        asset_root = resolve_asset_path(
+            asset_id,
+            cache_dir=args.asset_cache_dir,
+            download=bool(args.download_assets),
+            base_url=args.asset_base_url,
+        )
+        benchmark_dir = asset_root
+        input_dir = asset_root
     summary, _folds, _per_record = run_ablation(
-        benchmark_dir=args.benchmark_dir.expanduser(),
-        input_dir=args.input_dir.expanduser(),
+        benchmark_dir=benchmark_dir,
+        input_dir=input_dir,
         out_dir=args.out_dir.expanduser(),
         iterations=args.iterations,
         seed=args.seed,

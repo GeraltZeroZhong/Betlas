@@ -8,6 +8,7 @@ from betlas.ml.ablations import feature_group_for, run_ablation_suite
 from betlas.ml.benchmark import (
     RuleScoreClassifier,
     _align_predict_proba,
+    _connected_group_series,
     load_benchmark_config,
     run_grouped_benchmark,
 )
@@ -368,6 +369,49 @@ def test_benchmark_writes_preflight_before_xgboost_missing_error(tmp_path, monke
     assert preflight["status"] == "failed"
     assert preflight["failure_stage"] == "dependency"
     assert preflight["model_dependency_status"]["xgboost_tuned"].startswith("unavailable")
+
+
+def test_benchmark_preflight_fails_when_model_skip_leaves_no_runnable_models(tmp_path, monkeypatch) -> None:
+    features = tmp_path / "features.csv"
+    out_dir = tmp_path / "benchmark"
+    rows = []
+    for group_id in range(2):
+        for label in FOLD_LABELS:
+            rows.append(
+                {
+                    "record_id": f"{label}_{group_id}",
+                    "pdb_id": f"p{group_id}{label[:2]}",
+                    "domain_id": f"{label}_{group_id}",
+                    "cath_s35_cluster_id": f"{label}_g{group_id}",
+                    "fold_label_final": label,
+                    "betlas_parse_ok": 1,
+                    "betlas_axis_best_angular_coverage": float(group_id + 1),
+                }
+            )
+    pd.DataFrame(rows).to_csv(features, index=False)
+    monkeypatch.setattr("betlas.ml.benchmark._xgboost_available", lambda: False)
+
+    with pytest.raises(ValueError, match="did not enable any available models"):
+        run_grouped_benchmark(
+            features,
+            out_dir,
+            n_splits=2,
+            config={"models": {"include": ["xgboost_tuned"], "allow_model_skip": True}},
+        )
+
+    preflight = pd.read_json(out_dir / "benchmark_preflight.json", typ="series")
+    assert preflight["status"] == "failed"
+    assert preflight["failure_stage"] == "dependency"
+
+
+def test_benchmark_grouping_canonicalizes_case_and_whitespace() -> None:
+    groups = _connected_group_series(
+        pd.DataFrame({"pdb_id": ["1abc", " 1ABC ", "2xyz"]}),
+        ("pdb_id",),
+    )
+
+    assert groups.iloc[0] == groups.iloc[1]
+    assert groups.iloc[2] != groups.iloc[0]
 
 
 def test_ablation_writes_dependency_failure_preflight(tmp_path, monkeypatch) -> None:

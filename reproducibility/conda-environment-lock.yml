@@ -4,6 +4,7 @@ channels:
   - defaults
 dependencies:
   - python=3.13.9
+  - dssp
   - pip
   - pip:
       - numpy==2.4.0

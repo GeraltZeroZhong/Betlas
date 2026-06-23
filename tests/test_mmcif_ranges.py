@@ -219,6 +219,50 @@ def test_build_structure_geometry_rejects_nonnumeric_selected_author_residue_id(
         build_structure_geometry(_domain(), structure)
 
 
+def test_build_structure_geometry_rejects_nonnumeric_author_residue_id_inside_selected_range(tmp_path) -> None:
+    structure = tmp_path / "range_nonnumeric.cif"
+    structure.write_text(
+        "\n".join(
+            [
+                "data_range_nonnumeric",
+                "loop_",
+                "_atom_site.group_PDB",
+                "_atom_site.id",
+                "_atom_site.type_symbol",
+                "_atom_site.label_atom_id",
+                "_atom_site.auth_atom_id",
+                "_atom_site.label_alt_id",
+                "_atom_site.label_comp_id",
+                "_atom_site.auth_asym_id",
+                "_atom_site.label_asym_id",
+                "_atom_site.auth_seq_id",
+                "_atom_site.label_seq_id",
+                "_atom_site.pdbx_PDB_ins_code",
+                "_atom_site.Cartn_x",
+                "_atom_site.Cartn_y",
+                "_atom_site.Cartn_z",
+                "_atom_site.occupancy",
+                "ATOM 1 C CA CA . ALA A A 1 1 ? 0.000 0.000 0.000 1.00",
+                "ATOM 2 C CA CA . ALA A A 2A 2 ? 1.000 0.000 0.000 1.00",
+                "ATOM 3 C CA CA . ALA A A 3 3 ? 2.000 0.000 0.000 1.00",
+                "loop_",
+                "_struct_sheet_range.sheet_id",
+                "_struct_sheet_range.id",
+                "_struct_sheet_range.beg_auth_asym_id",
+                "_struct_sheet_range.end_auth_asym_id",
+                "_struct_sheet_range.beg_auth_seq_id",
+                "_struct_sheet_range.end_auth_seq_id",
+                "S1 1 A A 1 3",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="numeric author residue IDs only"):
+        build_structure_geometry(_domain(residue_ranges="1-3:A"), structure)
+
+
 def test_out_of_range_insertion_code_sheet_boundary_does_not_block_selected_range(tmp_path) -> None:
     structure = tmp_path / "out_of_range_insertion.cif"
     structure.write_text(
@@ -320,12 +364,14 @@ def test_build_structure_geometry_respects_mmcif_model_id(tmp_path) -> None:
         DomainCandidate.from_mapping({**_domain().__dict__, "model_id": 1}),
         structure,
     )
+    inspect_row = inspect_mmcif_chains(structure)[0]
 
     assert [residue.coord_ca[0] for residue in model_1.residues] == [1.0, 2.0, 3.0]
     assert [residue.coord_ca[0] for residue in model_2.residues] == [101.0, 102.0, 103.0]
+    assert inspect_row["model_ids"] == ["0", "1"]
 
 
-def test_range_outside_nonnumeric_author_residue_id_does_not_block_selected_domain(tmp_path) -> None:
+def test_range_selection_rejects_nonnumeric_author_residue_id_on_selected_chain(tmp_path) -> None:
     structure = tmp_path / "range_skips_nonnumeric.cif"
     structure.write_text(
         "\n".join(
@@ -366,10 +412,8 @@ def test_range_outside_nonnumeric_author_residue_id_does_not_block_selected_doma
         encoding="utf-8",
     )
 
-    geometry = build_structure_geometry(_domain(residue_ranges="1-3:A"), structure)
-
-    assert [residue.auth_seq_id for residue in geometry.residues] == [1, 2, 3]
-    assert len(geometry.beta_segments) == 1
+    with pytest.raises(ValueError, match="numeric author residue IDs only"):
+        build_structure_geometry(_domain(residue_ranges="1-3:A"), structure)
 
 
 def test_reversed_sheet_range_overlaps_narrow_selected_range(tmp_path) -> None:

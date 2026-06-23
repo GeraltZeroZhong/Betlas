@@ -64,7 +64,8 @@ def main(
             f"{help_text['examples'].format(prog=prog)}\n\n"
             "Input feature CSV: canonical Betlas feature columns plus record identifiers.\n"
             f"{help_text['output']}\n"
-            "Stdout is status text, not CSV; pass --out for the CSV path.\n"
+            "Stdout is status text, not CSV; pass --out for the CSV path. "
+            "If --out is omitted, the configured io.output_csv default is used.\n"
             "Predictions: optional out-of-fold prediction CSV; when absent, rule-derived softmax weights are used "
             "and marked uncalibrated."
         ),
@@ -82,7 +83,11 @@ def main(
         default=None,
         help="Prediction model to use when --predictions contains multiple models. Use an empty value to skip filtering.",
     )
-    parser.add_argument("--out", default=None, help="Output readout CSV. Stdout is status text, not CSV.")
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Output readout CSV. If omitted, the configured io.output_csv default is used.",
+    )
     parser.add_argument("--manifest", default=None, help="Output run manifest JSON.")
     parser.add_argument("--no-manifest", action="store_true", help="Do not write a run manifest.")
     if fixed_mode is None:

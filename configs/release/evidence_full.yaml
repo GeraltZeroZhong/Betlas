@@ -1,3 +1,5 @@
+# Source-tree release recipe. Inputs under data/, runs/, and outputs/ are
+# generated/local artifacts; this config is not a clean-clone quickstart.
 schema: betlas.release-evidence-config.latest
 inputs:
   features: data/processed/betlas_full_features.csv

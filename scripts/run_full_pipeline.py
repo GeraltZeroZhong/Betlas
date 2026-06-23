@@ -36,6 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-per-class", type=int, default=FullPipelineConfig.target_per_class, help="Balanced-sampler target rows per fold class.")
     parser.add_argument("--include-putative", action="store_true", help="Include putative CATH-derived rows when building labels.")
     parser.add_argument("--all-eligible", action="store_true", help="Use every eligible row instead of balanced sampling.")
+    parser.add_argument(
+        "--sample-balanced",
+        action="store_true",
+        help="Use balanced sampling so --target-per-class and sampler caps apply.",
+    )
     parser.add_argument("--max-per-pdb", type=int, default=FullPipelineConfig.max_per_pdb, help="Maximum sampled domains per PDB entry.")
     parser.add_argument("--initial-max-per-s35", type=int, default=FullPipelineConfig.initial_max_per_s35, help="Initial maximum sampled domains per CATH S35 cluster.")
     parser.add_argument("--max-s35-cap", type=int, default=FullPipelineConfig.max_s35_cap, help="Maximum relaxed cap per CATH S35 cluster.")
@@ -51,7 +56,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.all_eligible and args.sample_balanced:
+        raise SystemExit("--all-eligible and --sample-balanced are mutually exclusive")
     base = load_full_pipeline_config(args.config)
+    all_eligible = False if args.sample_balanced else args.all_eligible or base.all_eligible
     result = run_full_pipeline(
         FullPipelineConfig(
             cath_dir=args.cath_dir if args.cath_dir != FullPipelineConfig.cath_dir else base.cath_dir,
@@ -60,7 +68,7 @@ def main() -> None:
             if args.target_per_class != FullPipelineConfig.target_per_class
             else base.target_per_class,
             include_putative=args.include_putative or base.include_putative,
-            all_eligible=args.all_eligible or base.all_eligible,
+            all_eligible=all_eligible,
             max_per_pdb=args.max_per_pdb if args.max_per_pdb != FullPipelineConfig.max_per_pdb else base.max_per_pdb,
             initial_max_per_s35=args.initial_max_per_s35
             if args.initial_max_per_s35 != FullPipelineConfig.initial_max_per_s35

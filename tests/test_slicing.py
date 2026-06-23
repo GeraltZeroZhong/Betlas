@@ -327,6 +327,9 @@ def test_extract_features_structure_no_sheet_fails_or_writes_status_only_row(
         ]
     )
     row = pd.read_csv(features).iloc[0]
+    out = capsys.readouterr().out
+    assert "failed feature status row" in out
+    assert "betlas_parse_ok=0" in out
     assert row["betlas_parse_ok"] == 0
     assert "betlas_top_fold" not in row.index
     assert not any(column.startswith("betlas_rule_score_") for column in row.index)
@@ -357,6 +360,22 @@ def test_build_dataset_stdout_skips_manifest(monkeypatch: pytest.MonkeyPatch, ca
     assert "Wrote 1 labels to stdout" in captured.err
 
 
+def test_extract_features_without_args_points_to_single_structure_or_build_dataset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "DEFAULT_LABELS_CSV", tmp_path / "missing_labels.csv")
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["extract-features"])
+
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "betlas extract-features --structure STRUCTURE.cif" in err
+    assert "betlas build-dataset --out data/processed/betlas_full_labels.csv" in err
+
+
 def test_chains_cli_inspects_author_and_label_chains(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -367,6 +386,7 @@ def test_chains_cli_inspects_author_and_label_chains(
     cli.main(["chains", str(structure)])
     out = capsys.readouterr().out
     assert "auth_chain_id" in out
+    assert "model_ids" in out
     assert "insertion_code_ca_count" in out
     assert "nonpolymer_atom_rows" in out
     assert "protein_like_hetatm_ca_count" in out
@@ -376,7 +396,23 @@ def test_chains_cli_inspects_author_and_label_chains(
     cli.main(["structure", "inspect", str(structure), "--format", "json"])
     json_out = capsys.readouterr().out
     assert '"auth_chain_id": "A"' in json_out
+    assert '"model_ids": [' in json_out
     assert '"sheet_annotation_available": true' in json_out
+
+
+def test_chains_cli_rejects_empty_mmcif_without_header_only_success(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    structure = tmp_path / "bad.cif"
+    structure.write_text("data_bad\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["structure", "inspect", str(structure)])
+
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "no _atom_site.auth_asym_id rows" in err
 
 
 def test_slice_cli_zero_informative_slices_writes_status_and_headers(
@@ -411,6 +447,10 @@ def test_slice_cli_zero_informative_slices_writes_status_and_headers(
     assert "status" in slice_frame.columns
     payload = summary.read_text(encoding="utf-8")
     assert '"status": "no_informative_slices"' in payload
+    manifest = json.loads(summary.with_suffix(".json.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["command"] == "betlas slice"
+    assert manifest["metrics"]["status"] == "no_informative_slices"
+    assert manifest["parameters"]["min_points_per_slice"] == 99
     point_frame = pd.read_csv(points)
     assert set(point_frame["included"]) == {0}
     assert set(point_frame["exclusion_reason"]) == {"no_informative_slices"}
@@ -429,7 +469,9 @@ def test_grammar_score_strict_rejects_incomplete_feature_table(
     with pytest.raises(SystemExit) as exc:
         cli.main(["grammar", "score", "--features", str(features)])
     assert exc.value.code == 2
-    assert "requires betlas_parse_ok" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "requires betlas_parse_ok" in err
+    assert "betlas extract-features --structure STRUCTURE.cif" in err
 
     cli.main(["grammar", "score", "--features", str(features), "--no-strict", "--out", str(permissive)])
     assert "betlas_top_fold" in pd.read_csv(permissive).columns

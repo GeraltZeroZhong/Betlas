@@ -239,6 +239,74 @@ def test_pending_asset_verify_guides_download_not_verify_base_url(
     assert "betlas assets download pending-asset --base-url <local mirror>" in text
 
 
+def test_pending_asset_strict_verify_compacts_multi_file_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_dir = tmp_path / "manifests" / "example" / "official"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "manifest.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: betlas.asset-manifest.v1",
+                "asset_id: multi-pending",
+                "asset_type: unit_bundle",
+                "readout: beta_barrel_detection",
+                "profile: unit",
+                "release_status: pending_release",
+                "bundle: unit.zip",
+                "bundle_subdir: example/official",
+                "generated_by:",
+                "  - tests/test_assets.py",
+                "source_inputs:",
+                "  - unit",
+                "files:",
+                "  - filename: first.txt",
+                "    purpose: unit fixture",
+                "    byte_size: 1",
+                f"    sha256: {_sha256(b'a')}",
+                "    download_path: example/official/first.txt",
+                "  - filename: second.txt",
+                "    purpose: unit fixture",
+                "    byte_size: 1",
+                f"    sha256: {_sha256(b'b')}",
+                "    download_path: example/official/second.txt",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_dir.parent.parent))
+
+    with pytest.raises(AssetError) as exc:
+        verify_asset("multi-pending", cache_dir=tmp_path / "cache", strict=True)
+
+    message = str(exc.value)
+    assert "First failures: first.txt: missing; second.txt: missing" in message
+    assert message.count("betlas assets download multi-pending --base-url <local mirror>") == 1
+
+
+def test_pending_asset_strict_report_guides_local_mirror(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_root = _write_manifest(
+        tmp_path,
+        asset_id="pending-report",
+        filename="tiny.txt",
+        data=b"pending\n",
+        release_status="pending_release",
+    )
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
+
+    with pytest.raises(AssetError) as exc:
+        asset_file_report("pending-report", cache_dir=tmp_path / "cache", strict=True)
+
+    message = str(exc.value)
+    assert "asset is pending_release" in message
+    assert "betlas assets download pending-report --base-url <local mirror>" in message
+
+
 def test_asset_manifest_rejects_unsafe_download_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     manifest_root = _write_manifest(
         tmp_path,

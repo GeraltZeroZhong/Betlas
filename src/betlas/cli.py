@@ -67,6 +67,13 @@ def _require_file(path_value: str | Path, *, label: str) -> Path:
                 "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out runs/features.csv` "
                 "and pass `--features runs/features.csv`, or run the documented quickstart first"
             )
+        elif label.lower().startswith("label") and path == DEFAULT_LABELS_CSV:
+            hint = (
+                "; for a single structure, run "
+                "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out runs/features.csv`; "
+                "for batch CATH labels, run "
+                "`betlas build-dataset --out data/processed/betlas_full_labels.csv` first"
+            )
         raise FileNotFoundError(f"{label} file does not exist: {path}{hint}")
     if not path.is_file():
         raise FileNotFoundError(f"{label} path is not a file: {path}")
@@ -219,7 +226,16 @@ def extract_features_command(args: argparse.Namespace) -> None:
                 extra={"structure_file": structure_state},
             ),
         )
-        print(f"Wrote {len(feature_df)} feature row to {out}")
+        parse_ok_rows = int(
+            pd.to_numeric(feature_df.get("betlas_parse_ok", 0), errors="coerce")
+            .fillna(0)
+            .astype(int)
+            .sum()
+        )
+        if parse_ok_rows == 0:
+            print(f"Wrote {len(feature_df)} failed feature status row to {out} (betlas_parse_ok=0)")
+        else:
+            print(f"Wrote {len(feature_df)} feature row to {out}")
         return
 
     labels_path = _require_file(args.labels, label="labels CSV")
@@ -409,6 +425,8 @@ def grammar_score_command(args: argparse.Namespace) -> None:
     elif args.strict:
         raise ValueError(
             "grammar score strict validation requires betlas_parse_ok=1 in the feature CSV. "
+            "Generate a canonical feature table first with `betlas extract-features --structure STRUCTURE.cif "
+            "--chain CHAIN --out runs/features.csv`. "
             "Use --no-strict only for compatibility scoring of older feature tables."
         )
     else:
@@ -675,7 +693,7 @@ def chains_command(args: argparse.Namespace) -> None:
         print(json.dumps({"structure": str(structure), "chains": rows}, indent=2, sort_keys=True))
         return
     print(
-        "auth_chain_id\tlabel_chain_ids\tstandard_ca_residue_count\tinsertion_code_ca_count\t"
+        "auth_chain_id\tlabel_chain_ids\tmodel_ids\tstandard_ca_residue_count\tinsertion_code_ca_count\t"
         "nonpolymer_atom_rows\tprotein_like_hetatm_ca_count\tusable_sheet_range_count\t"
         "blocked_sheet_range_count\tsheet_annotation_available\thelix_conf_annotation_available\tworkflow_hints"
     )
@@ -685,6 +703,7 @@ def chains_command(args: argparse.Namespace) -> None:
                 [
                     str(row["auth_chain_id"]),
                     ",".join(str(value) for value in row["label_chain_ids"]),
+                    ",".join(str(value) for value in row["model_ids"]),
                     str(row["standard_ca_residue_count"]),
                     str(row["insertion_code_ca_count"]),
                     str(row["nonpolymer_atom_rows"]),
@@ -754,6 +773,7 @@ def slice_command(args: argparse.Namespace) -> None:
         config=config,
     )
     payload = _slice_summary_payload(args, bundle)
+    output_paths: dict[str, Path] = {}
 
     if args.out:
         slice_columns = [
@@ -826,6 +846,7 @@ def slice_command(args: argparse.Namespace) -> None:
         path = Path(args.out)
         path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows, columns=slice_columns).to_csv(path, index=False)
+        output_paths["slices_csv"] = path
         print(f"Wrote {len(rows)} Betlas slice rows to {path}")
 
     if args.points_out:
@@ -918,13 +939,48 @@ def slice_command(args: argparse.Namespace) -> None:
         path = Path(args.points_out)
         path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(rows, columns=point_columns).to_csv(path, index=False)
+        output_paths["points_csv"] = path
         print(f"Wrote {len(rows)} Betlas slice-point rows to {path}")
 
     if args.summary_out:
         path = Path(args.summary_out)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        output_paths["summary_json"] = path
         print(f"Wrote Betlas slice summary to {path}")
+
+    if output_paths:
+        primary_path = output_paths.get("summary_json") or output_paths.get("slices_csv") or output_paths["points_csv"]
+        write_json(
+            primary_path.with_suffix(f"{primary_path.suffix}.manifest.json"),
+            build_run_manifest(
+                command="betlas slice",
+                parameters={
+                    "path": str(args.path),
+                    "chain": args.chain,
+                    "record_id": args.record_id,
+                    "pdb_id": args.pdb_id,
+                    "domain_id": args.domain_id,
+                    "residue_ranges": args.residue_ranges or "",
+                    "model_id": int(args.model_id),
+                    "axis": args.axis,
+                    "min_points_per_slice": int(args.min_points_per_slice),
+                    "target_bin_width": float(args.target_bin_width),
+                    "min_bins": int(args.min_bins),
+                    "max_bins": int(args.max_bins),
+                },
+                inputs={"structure": Path(args.path)},
+                outputs=output_paths,
+                metrics={
+                    "status": payload["status"],
+                    "slice_count": int(payload["slice_count"]),
+                    "point_count": int(len(bundle.points)),
+                    "included_point_count": int(sum(1 for point in bundle.points if point.included)),
+                    "excluded_point_count": int(sum(1 for point in bundle.points if not point.included)),
+                },
+                extra={"slice_summary": payload, "structure_file": file_state(Path(args.path))},
+            ),
+        )
 
     if not args.out and not args.points_out and not args.summary_out:
         print(json.dumps(payload, indent=2, sort_keys=True))

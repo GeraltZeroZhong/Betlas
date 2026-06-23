@@ -225,7 +225,7 @@ def metric_values(reference: np.ndarray, pred: np.ndarray) -> dict[str, Any]:
 def load_rows(aligned_dir: Path) -> pd.DataFrame:
     rows = pd.read_csv(aligned_dir / "per_record_aligned_wide.csv")
     rows["record_id"] = rows["record_id"].astype(str)
-    rows["pdb_id"] = rows["pdb_id"].astype(str)
+    rows["pdb_id"] = rows["pdb_id"].astype(str).str.strip().str.upper()
     rows["auth_chain_id"] = rows["auth_chain_id"].astype(str)
     if "reference_count" not in rows.columns:
         if COMPAT_REFERENCE_COUNT_COLUMN not in rows.columns:
@@ -244,17 +244,49 @@ def _count_dict(values: pd.Series | np.ndarray) -> dict[str, int]:
     return {str(k): int(v) for k, v in series.value_counts().sort_index().items()}
 
 
+def _check_unique_record_ids(values: pd.Series | list[str], *, frame_name: str) -> list[str]:
+    ids = pd.Series(values).astype(str)
+    if ids.duplicated().any():
+        dupes = ids.loc[ids.duplicated()].head(8).tolist()
+        raise ValueError(f"{frame_name} contains duplicate record_id values: {dupes}")
+    return ids.tolist()
+
+
+def _align_record_frame(
+    frame: pd.DataFrame,
+    rows: pd.DataFrame,
+    *,
+    path: Path,
+    frame_name: str,
+) -> pd.DataFrame:
+    if "record_id" not in frame.columns:
+        raise ValueError(f"{frame_name} lacks `record_id`: {path}")
+    target_ids = _check_unique_record_ids(rows["record_id"], frame_name="fixed-cohort aligned rows")
+    source = frame.copy()
+    source["record_id"] = _check_unique_record_ids(source["record_id"], frame_name=frame_name)
+    missing = sorted(set(target_ids) - set(source["record_id"]))
+    extra = sorted(set(source["record_id"]) - set(target_ids))
+    if missing or extra:
+        raise ValueError(
+            f"{frame_name} record_id set does not match aligned rows "
+            f"(missing={missing[:8]}, extra={extra[:8]}): {path}"
+        )
+    return source.set_index("record_id").loc[target_ids].reset_index()
+
+
 def build_fold_preflight(rows: pd.DataFrame) -> dict[str, Any]:
     folds = rows["outer_fold"].astype(int)
     counts = rows["reference_count"].astype(int)
     global_count_values = sorted(int(value) for value in counts.unique())
+    pdb_keys = rows["pdb_id"].astype(str).str.strip().str.upper()
     leakage_rows: list[dict[str, Any]] = []
-    for pdb_id, part in rows.groupby(rows["pdb_id"].astype(str), dropna=False):
+    for pdb_id, part in rows.groupby(pdb_keys, dropna=False):
         fold_values = sorted(int(value) for value in part["outer_fold"].astype(int).unique())
         if len(fold_values) > 1:
             leakage_rows.append(
                 {
                     "pdb_id": str(pdb_id),
+                    "input_pdb_id_values": sorted(part["pdb_id"].astype(str).unique().tolist()),
                     "outer_folds": fold_values,
                     "record_ids": part["record_id"].astype(str).head(8).tolist(),
                 }
@@ -279,7 +311,7 @@ def build_fold_preflight(rows: pd.DataFrame) -> dict[str, Any]:
         if missing_train:
             failures.append(f"fold {fold}: train partition lacks reference_count classes {missing_train}")
         if missing_test:
-            warnings.append(f"fold {fold}: test partition lacks reference_count classes {missing_test}")
+            failures.append(f"fold {fold}: test partition lacks reference_count classes {missing_test}")
         fold_rows.append(
             {
                 "outer_fold": fold,
@@ -327,9 +359,14 @@ def write_fold_preflight(rows: pd.DataFrame, out_dir: Path) -> dict[str, Any]:
 
 def load_151(aligned_dir: Path, rows: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     columns = pd.read_csv(aligned_dir / "feature_columns_151.csv")["feature"].astype(str).tolist()
-    features = pd.read_csv(aligned_dir / "betlas_151_chain_features.csv")
-    features["record_id"] = features["record_id"].astype(str)
-    x151 = features.set_index("record_id").loc[rows["record_id"], columns].copy()
+    feature_path = aligned_dir / "betlas_151_chain_features.csv"
+    features = _align_record_frame(
+        pd.read_csv(feature_path),
+        rows,
+        path=feature_path,
+        frame_name="Betlas 151 chain feature table",
+    )
+    x151 = features.loc[:, columns].copy()
     for column in columns:
         x151[column] = pd.to_numeric(x151[column], errors="coerce").fillna(0.0)
     return x151.reset_index(drop=True).astype(float), columns
@@ -343,12 +380,25 @@ def load_esmc_pca_by_fold(
     seed: int,
 ) -> tuple[dict[int, pd.DataFrame], dict[int, pd.DataFrame], pd.Series, int]:
     loaded = np.load(aligned_dir / "esmc_mean_embeddings_aligned.npz", allow_pickle=False)
-    record_ids = loaded["record_id"].astype(str).tolist()
+    record_ids = _check_unique_record_ids(
+        loaded["record_id"].astype(str).tolist(),
+        frame_name="ESM-C embedding cache",
+    )
+    target_ids = _check_unique_record_ids(rows["record_id"], frame_name="fixed-cohort aligned rows")
+    missing_embeddings = sorted(set(target_ids) - set(record_ids))
+    if missing_embeddings:
+        raise ValueError(f"ESM-C embedding cache is missing record_id values: {missing_embeddings[:8]}")
     embeddings = pd.DataFrame(loaded["embeddings"], index=record_ids)
-    embeddings = embeddings.loc[rows["record_id"].astype(str).tolist()]
+    embeddings = embeddings.loc[target_ids]
     coverage = pd.read_csv(aligned_dir / "esmc_embedding_coverage.csv")
-    coverage["record_id"] = coverage["record_id"].astype(str)
-    esmc_available = coverage.set_index("record_id").loc[rows["record_id"], "esmc_available"].astype(float)
+    coverage["record_id"] = _check_unique_record_ids(
+        coverage["record_id"],
+        frame_name="ESM-C embedding coverage table",
+    )
+    missing_coverage = sorted(set(target_ids) - set(coverage["record_id"]))
+    if missing_coverage:
+        raise ValueError(f"ESM-C embedding coverage is missing record_id values: {missing_coverage[:8]}")
+    esmc_available = coverage.set_index("record_id").loc[target_ids, "esmc_available"].astype(float)
     folds = rows["outer_fold"].astype(int).to_numpy()
     n_train_min = len(rows) - int(pd.Series(folds).value_counts().max())
     actual_dim = min(int(pca_dim), n_train_min, embeddings.shape[1])
@@ -374,20 +424,19 @@ def load_layer_radial16(
     layer_values_csv: Path,
     rows: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    source = pd.read_csv(layer_values_csv)
-    source["record_id"] = source["record_id"].astype(str)
-    source = source.set_index("record_id")
-    if set(source.index) != set(rows["record_id"]):
-        missing = sorted(set(rows["record_id"]) - set(source.index))
-        extra = sorted(set(source.index) - set(rows["record_id"]))
-        raise SystemExit(f"LayerRadial16 row mismatch. missing={missing[:8]} extra={extra[:8]}")
+    source = _align_record_frame(
+        pd.read_csv(layer_values_csv),
+        rows,
+        path=layer_values_csv,
+        frame_name="LayerRadial16 feature table",
+    )
 
     layer_columns = [layer_feature_name(raw) for raw in LAYER_RADIAL_RAW]
     missing_features = [feature for feature in layer_columns if feature not in source.columns]
     if missing_features:
         raise SystemExit(f"LayerRadial16 source features missing: {missing_features}")
 
-    layer = source.loc[rows["record_id"].astype(str), layer_columns].copy()
+    layer = source.loc[:, layer_columns].copy()
     for column in layer.columns:
         layer[column] = pd.to_numeric(layer[column], errors="coerce").fillna(0.0)
     layer = layer.reset_index(drop=True).astype(float)

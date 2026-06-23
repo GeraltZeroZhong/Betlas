@@ -1,12 +1,16 @@
 # Betlas
 
-Betlas is a Python toolkit for beta-structure geometry grammars, transparent
-fold-rule scores, grouped benchmarks, and secondary readouts for
-beta-barrel-like geometry, candidate stave counts, and topology diagnostics.
+Betlas is a Python toolkit for turning beta-rich protein structures into
+auditable geometric evidence. Modern structure prediction has made structures
+available at scale; Betlas focuses on the next step, describing fold assignments
+as reproducible claims about sheet order, sheet pairing, contact topology,
+closure-like organization, and global shape. It writes those claims as explicit
+CSV and JSON outputs: feature tables, transparent rule scores, slice evidence,
+readouts, and benchmark manifests.
 
-Betlas is designed around explicit tables. You provide annotated structures or
-feature tables; Betlas writes CSV/JSON outputs with parse status, provenance,
-grammar features, rule scores, readout evidence, and benchmark manifests.
+The name comes from **Beta + Atlas**. It reflects the idea that beta-structure
+patterns can become a map: a set of landmarks that can be inspected, joined,
+and reproduced.
 
 ## What Betlas Produces
 
@@ -45,10 +49,10 @@ python -m pip install -e .
 betlas --help
 ```
 
-Optional extras are installed only for packaged workflows that need them:
-`.[ml]` for tuned XGBoost benchmark configs and `.[dev]` for local test/build
-tooling. Repository companion fixed-cohort runners are source-tree workflows;
-install CatBoost explicitly for those runs with `python -m pip install catboost`.
+Optional extras are available for workflows that need them: `.[ml]` for tuned
+XGBoost benchmark configs and `.[dev]` for local test/build tooling.
+Repository companion fixed-cohort runners live in the source tree; install
+CatBoost explicitly for those runs with `python -m pip install catboost`.
 
 For a local wheel built from this source tree:
 
@@ -59,7 +63,7 @@ python -m pip install dist/betlas-1.0.0-py3-none-any.whl
 ```
 
 Future tagged releases may also be installed from PyPI with
-`python -m pip install betlas`. Before that release is published, use source
+`python -m pip install betlas`. Until that release is published, use a source
 install or a local wheel from this checkout.
 
 Runtime requirements:
@@ -91,13 +95,13 @@ betlas readout beta-barrel-staves --check-env
 | CATH source files | `betlas build-dataset --all-eligible --out runs/labels.csv` | Produces labels and grouping columns for benchmarks. If required files are absent from `--cath-dir`, Betlas downloads current CATH daily files; use a pinned local mirror for reproducible release runs. |
 | Feature CSV with labels | `betlas benchmark --features runs/features.csv --out-dir runs/benchmark` | Rows with `betlas_parse_ok != 1` are filtered from benchmark fits. |
 | Feature CSV without labels | `betlas grammar score --features runs/features.csv --out runs/rule_scores.csv` | Requires parse-ok rows and grammar input columns by default. |
-| Prediction CSV from another model | `betlas readout topology-diagnostics --features runs/features.csv --predictions runs/predictions.csv --out runs/topology.csv` | Explicit missing prediction files fail. |
-| Local mirror of Betlas assets | `BETLAS_ASSET_BASE_URL=/mirror/betlas-assets betlas assets download ASSET_ID` | Required while packaged manifests report `pending_release`. |
+| Prediction CSV from another model | `betlas readout topology-diagnostics --features runs/features.csv --predictions runs/predictions.csv --out runs/topology.csv` | Prediction paths are checked before diagnostics are written. |
+| Local mirror of Betlas assets | `BETLAS_ASSET_BASE_URL=/mirror/betlas-assets betlas assets download ASSET_ID` | Use this for fixed-cohort assets while the packaged manifests are marked `pending_release`. |
 
 ## Quickstart
 
-The installed package includes a tiny annotated mmCIF example. It is for smoke
-testing the public workflow, not for biological interpretation.
+The installed package includes a deliberately tiny annotated mmCIF example. Use
+it to check the public workflow before moving to a real structure or cohort.
 
 ```bash
 mkdir -p runs/examples
@@ -140,8 +144,8 @@ PY
 | Concept | Meaning |
 | --- | --- |
 | Geometry grammar | A deterministic family of beta-structure features such as sheet geometry, contact topology, angular closure, or axis periodicity. |
-| Fold-rule score | A transparent score computed from Betlas feature columns for one fold label. It is not a trained probability. |
-| Parse status | `betlas_parse_ok=1` marks rows that passed structure parsing and feature extraction. Public scoring and benchmark paths reject or filter failed rows by default. |
+| Fold-rule score | A transparent deterministic score computed from Betlas feature columns for one fold label. |
+| Parse status | `betlas_parse_ok=1` marks rows that passed structure parsing and feature extraction. Public scoring and benchmark paths use parse-ok rows by default. |
 | Slice evidence | Axis-aligned z-bin summaries used by closure and stave-style grammars. Slice points preserve residue, strand, sheet, and chain traceability. |
 | Readout | A secondary workflow that turns structures or feature tables into focused evidence tables. |
 | Asset manifest | A packaged YAML file containing file names, byte sizes, SHA-256 hashes, release status, and release-relative download paths. |
@@ -159,10 +163,10 @@ Grammar extraction and slicing accept annotated mmCIF inputs:
 
 These workflows read author chain ids and mmCIF secondary-structure records
 such as `_struct_sheet_range` and `_struct_conf`. A structure that lacks usable
-beta-sheet segments is treated as a failed or non-informative input, not as a
-successful all-zero result. Selected grammar/slice residues must currently use
-numeric author residue IDs; insertion-coded residues are rejected instead of
-being silently dropped.
+beta-sheet segments is reported with parse status so missing structure evidence
+stays distinct from measured zero-valued geometry. Selected grammar/slice
+residues currently use numeric author residue IDs; insertion-code ranges should
+be normalized upstream before selecting a residue range.
 Multi-model mmCIF inputs default to model id `0`, the first mmCIF model. Use
 `--model-id` in `extract-features --structure` and `slice` when a different
 model should be analyzed.
@@ -194,8 +198,8 @@ Batch feature extraction expects one row per domain or chain. Required columns:
 
 Benchmark grouping builds connected components across non-empty
 `cath_s35_cluster_id`, `cath_homology_code`, and `pdb_id` values. Every retained
-row must have at least one of those identifiers so grouped cross-validation
-cannot silently fall back to row-level splits.
+row needs at least one of those identifiers so cross-validation remains grouped
+at the structural or family level.
 
 ### Feature CSV
 
@@ -233,7 +237,8 @@ multiple models are present, and either probability-like columns named
 If `--predictions` is omitted, Betlas derives
 uncalibrated rule-softmax weights from transparent rule scores and marks the
 source/calibration columns accordingly. If `--predictions PATH` is provided and
-the file is missing, the command fails.
+the file is not present, Betlas reports that input problem before writing a
+diagnostic table.
 
 ### Asset Mirror
 
@@ -266,10 +271,10 @@ betlas grammar describe axis_closure
 betlas grammar describe axis_periodicity --format json
 ```
 
-`grammar score` rejects rows with `betlas_parse_ok != 1` by default. With
-`--allow-parse-fail`, failed rows are carried through as status-only rows with
-`betlas_score_status=parse_failed`; Betlas does not assign fold calls or rule
-scores to parse-failed rows.
+`grammar score` expects parse-ok rows by default. With `--allow-parse-fail`,
+parse-failed rows are carried through as status-only rows with
+`betlas_score_status=parse_failed`; fold calls and rule scores remain reserved
+for rows with usable grammar inputs.
 
 ### Slice Audit
 
@@ -282,10 +287,9 @@ betlas slice STRUCTURE.cif \
   --summary-out runs/slice_summary.json
 ```
 
-`slice` fails when no beta-sheet segment can be parsed for the selected chain.
-This avoids treating a non-informative structure as a successful empty result.
-If beta segments are present but the configured slice thresholds produce zero
-informative z-bins, `slice_summary.json` reports
+`slice` reports an input error when no beta-sheet segment can be parsed for the
+selected chain. If beta segments are present but the configured slice thresholds
+produce zero informative z-bins, `slice_summary.json` reports
 `status: no_informative_slices`; `slices.csv` is header-only because there are
 no informative slice records; and `slice_points.csv` still lists projected beta
 residues with `included=0` and `exclusion_reason`.
@@ -301,8 +305,8 @@ betlas readout beta-barrel-staves STRUCTURE.cif \
   --out runs/staves.csv
 ```
 
-For targeted exploratory analysis of one chain, ungated counting is available
-only when requested explicitly:
+For targeted exploratory analysis of one chain, run candidate stave counting
+without a detection gate by adding `--allow-ungated`:
 
 ```bash
 betlas readout beta-barrel-staves STRUCTURE.cif \
@@ -311,23 +315,24 @@ betlas readout beta-barrel-staves STRUCTURE.cif \
   --out runs/staves_A.csv
 ```
 
-Interpretation boundary: `beta-barrel-detection` reports
-beta-barrel-like geometry evidence. `beta-barrel-staves` reports a candidate
-strand/stave count. Detection `decision_score` is positive BARREL decision
-support, uses `0` for `NON_BARREL` rows, and keeps raw geometry in `score_raw`
-and `score_adjust`. `decision_score` and staves `confidence` are deterministic
-heuristic evidence scores, not calibrated probabilities.
+How to read the outputs: `beta-barrel-detection` reports beta-barrel-like
+geometry evidence. `beta-barrel-staves` reports a candidate strand/stave count.
+Detection `decision_score` is positive BARREL decision support, uses `0` for
+`NON_BARREL` rows, and keeps raw geometry in `score_raw` and `score_adjust`.
+`decision_score` and staves `confidence` are deterministic heuristic evidence
+scores with `calibration_status=uncalibrated`.
 For multi-model structure files, readout commands use the first model exposed
 by Biopython/DSSP; use grammar/slice `--model-id` for explicit model-level
-inspection.
+inspection. `betlas structure inspect STRUCTURE.cif` reports available
+zero-based `model_ids` for grammar/slice workflows.
 
-The `--barrel-decisions` CSV gate is a conservative post-hoc output gate: the
-staves pipeline still prepares/analyzes rows, then reports non-filtered
-candidate stave counts only for detection `BARREL` rows that match by exact
-resolved `source_path` plus chain. A detection CSV produced for a different
-path, such as an mmCIF path when the staves input is a PDB copy, is filtered
-instead of matched by basename. Detection `ERROR` rows remain error status in
-the gated staves output.
+The `--barrel-decisions` CSV acts as a post-hoc output gate. The staves
+pipeline prepares the candidate rows, then reports non-filtered candidate stave
+counts for detection `BARREL` rows that match by exact resolved `source_path`
+plus chain. A detection CSV produced for a different path, such as an mmCIF
+path when the staves input is a PDB copy, should be regenerated for the same
+resolved input path before gating. Detection `ERROR` rows remain error status
+in the gated staves output.
 Candidate staves are DSSP-run supported readouts. For stricter exploratory
 staves analysis, use an override such as
 `analyzer.layer.require_geometric_consistency=true`.
@@ -400,9 +405,15 @@ Aliases are also available:
 | `beta-barrel-staves` | staves CSV | What candidate stave count is supported? | strand count, confidence, gate status, layer evidence, score type |
 | `topology-diagnostics` | topology CSV | Which rows show boundary or mixed-topology signals? | ambiguity, probability source/calibration status, continuous topology scores, mixed-topology flags |
 
-For readout commands, stdout is progress/status text rather than CSV content.
-Always pass `--out` or the documented `output.csv=...` override when a workflow
-manager or shell redirection expects a CSV file.
+For readout commands, stdout is progress/status text; CSV content is written to
+the requested output path.
+For `topology-diagnostics`, pass `--out runs/topology.csv`; the Python/config
+key is `io.output_csv`. Detection and staves also accept the documented
+`output.csv=...` Hydra override.
+
+`rule_scores.csv` is an interpretability output that complements the raw feature
+table. Run `topology-diagnostics` on `features.csv` from
+`extract-features`; join external predictions with `--predictions` when needed.
 
 Readout column specs are available from Python:
 
@@ -433,10 +444,13 @@ chain_a = detect_beta_barrel_like("structure.cif", overrides=["input.chain_id=A"
 ## Assets And Reproducibility
 
 Betlas ships asset manifests in the package. Large payloads are verified
-against those manifests before use. Before the official asset payload is
-published, these fixed-cohort workflows require a local mirror whose layout
-matches the manifest `download_path` values; the package does not pretend that
-the pending payload is publicly downloadable.
+against those manifests before use. While the official asset payload is still
+pending, fixed-cohort workflows use a local mirror whose layout matches the
+manifest `download_path` values.
+The detection asset manifest covers the packaged official run bundle. The
+staves asset manifest is scoped to the fixed-cohort runner inputs; staves
+official outputs, preflight files, and metadata are generated locally by the
+companion runner.
 
 ```bash
 betlas assets list
@@ -444,8 +458,7 @@ betlas assets describe betlas-beta-barrel-detection-official-v1
 betlas assets describe betlas-beta-barrel-staves-official-v1
 ```
 
-While a manifest reports `pending_release`, default downloads fail fast. Use a
-local mirror:
+While a manifest reports `pending_release`, point Betlas at a local mirror:
 
 ```bash
 BETLAS_ASSET_BASE_URL=/mirror/betlas-assets \
@@ -464,8 +477,8 @@ BETLAS_ESMC_WEIGHTS=/path/to/esmc_weights.pt betlas assets check-esmc --required
 Betlas only resolves and checks local ESM-C paths. It does not download or
 redistribute third-party model weights.
 
-Repository companion workflows live under `scripts/`. They are source-tree
-workflows, not stable Python imports. Run them from the repository root with:
+Repository companion workflows live under `scripts/`. Treat them as source-tree
+commands rather than package imports, and run them from the repository root:
 
 ```bash
 PYTHONPATH=.:src python scripts/run_full_pipeline.py --help
@@ -478,13 +491,13 @@ written under ignored run directories such as `runs/...`.
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| `grammar score refused parse-failed feature rows` | One or more rows have `betlas_parse_ok != 1`. | Inspect `betlas_error` and `betlas_warnings`; rerun extraction with a structure that has usable sheet records. |
-| `strict validation failed` | Required grammar input columns are absent or nonnumeric. | Generate features with `betlas extract-features` or use `--no-strict` only for exploratory diagnostics. |
+| `grammar score refused parse-failed feature rows` | One or more rows have `betlas_parse_ok != 1`. | Inspect `betlas_error` and `betlas_warnings`; rerun extraction with a structure that has usable sheet records, or use `--allow-parse-fail` for status-only rows. |
+| `strict validation failed` | Required grammar input columns are absent or nonnumeric. | Generate features with `betlas extract-features`; use `--no-strict` for exploratory diagnostics on partial tables. |
 | `no beta-sheet segments` from `slice` | Selected chain lacks parsed beta-sheet segments. | Confirm chain id and mmCIF `_struct_sheet_range` records. |
 | DSSP not found | `mkdssp` is missing from `PATH`. | Install DSSP and pass `runtime.dssp_bin_path=/path/to/mkdssp` when needed. |
-| Asset download fails with `pending_release` | Default release payload is not available for that manifest. | Set `BETLAS_ASSET_BASE_URL` or `--base-url` to a local mirror. |
+| Asset download reports `pending_release` | The official payload for that manifest has not been published yet. | Set `BETLAS_ASSET_BASE_URL` or `--base-url` to a local mirror. |
 | Prediction file error in topology diagnostics | `--predictions` was provided but the file does not exist or lacks usable probability columns. | Provide the CSV or omit `--predictions` to use uncalibrated rule-softmax weights. |
-| Stave command requires a gate | Broad candidate counting is intentionally not silent. | Pass `--barrel-decisions runs/detection.csv` or explicitly use `--allow-ungated`. |
+| Stave command asks for a gate | Broad candidate counting is designed to run with upstream detection evidence. | Pass `--barrel-decisions runs/detection.csv` or use `--allow-ungated` for exploratory counting. |
 
 ## Python API
 
@@ -528,7 +541,7 @@ print(resolve_esmc_weights(required=False))
 ```
 
 Readout APIs are exposed for core package use. Repository companion scripts are
-executables and helpers, not stable imports.
+executables and helpers for source-tree workflows.
 
 ## Source-Tree Development
 
@@ -548,8 +561,8 @@ Before building a release candidate, verify:
 - Wheel and sdist contents exclude repository companion scripts, run outputs,
   tests, and large asset payloads.
 - Packaged asset manifests are present and large files are not.
-- Complete fixed-cohort reproduction requires a Git tag/source checkout because
-  the PyPI wheel/sdist are intentionally slim package artifacts.
+- Complete fixed-cohort reproduction uses a Git tag/source checkout because the
+  PyPI wheel/sdist stay focused on the installable package.
 
 ## Repository Layout
 
@@ -567,8 +580,8 @@ Before building a release candidate, verify:
 
 | Term | Definition |
 | --- | --- |
-| CATH label | External domain classification used as a benchmark label; it is not a membrane-protein assertion. |
-| Beta-barrel-like | A geometry decision based on Betlas deterministic evidence. It should not be read as a calibrated membrane-barrel probability. |
+| CATH label | External domain classification used as a benchmark label. |
+| Beta-barrel-like | A geometry decision based on Betlas deterministic evidence, reported with explicit score type and calibration status. |
 | Candidate stave count | A slice-derived count of strand/stave evidence, intended to be interpreted with detection and status columns. |
 | Parse-ok row | A row whose structure parsing and feature extraction succeeded for public scoring and benchmark workflows. |
 | Grammar family | A named group of deterministic features with a documented mathematical summary and declared output columns. |

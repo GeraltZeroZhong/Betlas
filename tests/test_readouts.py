@@ -12,6 +12,7 @@ import betlas
 import betlas.readouts.beta_barrel_detection as detection_api
 import betlas.readouts.beta_barrel_detection.cli as detection_cli
 import betlas.readouts.beta_barrel_detection.pipeline as detection_pipeline
+import betlas.readouts.beta_barrel_detection.pipeline_workers as detection_workers
 import betlas.readouts.beta_barrel_staves as staves_api
 import betlas.readouts.beta_barrel_staves.cli as staves_cli
 import betlas.readouts.beta_barrel_staves.readout as staves_readout
@@ -337,6 +338,36 @@ def test_beta_barrel_staves_prepare_error_rows_mark_score_not_applicable() -> No
     assert rows[0]["calibration_status"] == "not_applicable"
 
 
+def test_readout_check_env_prints_dssp_install_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    summary = {
+        "python": "3.test",
+        "python_executable": "/python",
+        "dssp": "not found",
+        "dssp_path": "",
+    }
+    monkeypatch.setattr(detection_cli, "runtime_summary", lambda *_args, **_kwargs: summary)
+    monkeypatch.setattr(detection_cli, "dssp_requirement_message", lambda: "install mkdssp for detection")
+    monkeypatch.setattr(staves_cli, "runtime_summary", lambda *_args, **_kwargs: summary)
+    monkeypatch.setattr(staves_cli, "dssp_requirement_message", lambda: "install mkdssp for staves")
+
+    with pytest.raises(SystemExit) as detection_exit:
+        detection_cli.main(["--check-env"])
+    detection_capture = capsys.readouterr()
+    assert detection_exit.value.code == 2
+    assert "DSSP: not found" in detection_capture.out
+    assert "install mkdssp for detection" in detection_capture.err
+
+    with pytest.raises(SystemExit) as staves_exit:
+        staves_cli.main(["--check-env", "--allow-ungated"])
+    staves_capture = capsys.readouterr()
+    assert staves_exit.value.code == 2
+    assert "DSSP: not found" in staves_capture.out
+    assert "install mkdssp for staves" in staves_capture.err
+
+
 def test_beta_barrel_detection_prepare_cache_preserves_or_skips_dssp_errors(tmp_path: Path) -> None:
     cfg = build_detection_config([])
     cfg.runtime.prepare_cache_enabled = True
@@ -368,6 +399,40 @@ def test_beta_barrel_detection_prepare_cache_preserves_or_skips_dssp_errors(tmp_
 
     store_prepare_payloads(str(structure), cfg, [payload])
     assert not prepare_cache_path(str(structure), cfg).exists()
+
+
+def test_beta_barrel_detection_prepare_uses_effective_chain_for_blank_pdb_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeChain:
+        id = " "
+
+    class FakeLoader:
+        secondary_structure_error = ""
+
+        def __init__(self, *_args, **_kwargs):
+            self.model = [FakeChain()]
+
+        def get_chain_data(self, chain_id: str) -> list[dict[str, object]]:
+            assert chain_id == " "
+            return [{"chain": "A", "coord": (0.0, 0.0, 0.0), "is_sheet": True}]
+
+    monkeypatch.setattr(detection_workers, "ProteinLoader", FakeLoader)
+    monkeypatch.setattr(detection_workers, "load_prepare_payloads", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(detection_workers, "store_prepare_payloads", lambda *_args, **_kwargs: None)
+    structure = tmp_path / "blank_chain.pdb"
+    structure.write_text(
+        "ATOM      1  CA  ALA     1       0.000   0.000   0.000  1.00 20.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    cfg = build_detection_config([])
+    cfg.input.chain_id = "A"
+
+    payloads = detection_workers.prepare_one_file(str(structure), cfg)
+
+    assert not isinstance(payloads, detection_workers.PrepareFailure)
+    assert payloads[0]["chain"] == "A"
 
 
 def test_beta_barrel_staves_prepare_cache_skips_dssp_errors(tmp_path: Path) -> None:
@@ -454,26 +519,56 @@ def test_staves_barrel_decisions_require_source_path_and_do_not_basename_match(t
     assert gated[0]["result"] == "FILTERED_OUT"
 
 
-def test_staves_barrel_decisions_fail_on_ambiguous_duplicate_filename_chain(tmp_path: Path) -> None:
+def test_staves_barrel_decisions_allow_duplicate_filename_chain_with_distinct_source_paths(
+    tmp_path: Path,
+) -> None:
     decisions_csv = tmp_path / "decisions.csv"
+    source_a = tmp_path / "a" / "same.cif"
+    source_b = tmp_path / "b" / "same.cif"
     pd.DataFrame(
         [
             {
                 "filename": "same.cif",
-                "source_path": str(tmp_path / "a" / "same.cif"),
+                "source_path": str(source_a),
                 "chain": "A",
                 "result": "BARREL",
             },
             {
                 "filename": "same.cif",
-                "source_path": str(tmp_path / "b" / "same.cif"),
+                "source_path": str(source_b),
                 "chain": "A",
                 "result": "BARREL",
             },
         ]
     ).to_csv(decisions_csv, index=False)
 
-    with pytest.raises(ValueError, match="ambiguous barrel decisions"):
+    decisions = _load_barrel_decisions(str(decisions_csv))
+
+    assert decisions[(str(source_a), "A")]["result"] == "BARREL"
+    assert decisions[(str(source_b), "A")]["result"] == "BARREL"
+
+
+def test_staves_barrel_decisions_fail_on_duplicate_exact_source_path_chain(tmp_path: Path) -> None:
+    decisions_csv = tmp_path / "decisions.csv"
+    source = tmp_path / "same.cif"
+    pd.DataFrame(
+        [
+            {
+                "filename": "same.cif",
+                "source_path": str(source),
+                "chain": "A",
+                "result": "BARREL",
+            },
+            {
+                "filename": "renamed.cif",
+                "source_path": str(source),
+                "chain": "A",
+                "result": "NON_BARREL",
+            },
+        ]
+    ).to_csv(decisions_csv, index=False)
+
+    with pytest.raises(ValueError, match="duplicate barrel decision"):
         _load_barrel_decisions(str(decisions_csv))
 
 

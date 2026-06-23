@@ -19,7 +19,7 @@ from .exceptions import BetaBarrelStavesReadoutError
 from .io.metadata import build_run_metadata, default_metadata_path, write_run_metadata
 from .io.results import print_results_summary, write_results_csv
 from .pipeline import apply_runtime_overrides, run_pipeline_result
-from .runtime import runtime_summary
+from .runtime import dssp_requirement_message, runtime_summary
 
 READOUT_NAME = "beta-barrel-staves"
 
@@ -84,23 +84,18 @@ def _load_barrel_decisions(path: str) -> dict[tuple[str, str], dict[str, str]]:
     if not csv_path.exists():
         raise FileNotFoundError(f"barrel decisions CSV does not exist: {csv_path}")
     decisions: dict[tuple[str, str], dict[str, str]] = {}
-    basename_sources: dict[tuple[str, str], set[str]] = {}
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             chain = str(row.get("chain", "")).strip()
             if not chain:
                 continue
-            filename = str(row.get("filename", "")).strip()
             source_path = str(row.get("source_path", "")).strip()
             if not source_path:
                 raise ValueError(
                     "barrel decisions CSV must contain source_path for each gated row; "
                     "basename-only matching is intentionally disabled"
                 )
-            basename_sources.setdefault((filename or Path(source_path).name, chain), set()).add(
-                _resolved_source_key(source_path)
-            )
             keys = {source_path, _resolved_source_key(source_path)}
             for key in sorted(item for item in keys if item):
                 decision_key = (key, chain)
@@ -109,17 +104,6 @@ def _load_barrel_decisions(path: str) -> dict[tuple[str, str], dict[str, str]]:
                         f"duplicate barrel decision for source_path={key!r}, chain={chain!r}"
                     )
                 decisions[decision_key] = dict(row)
-    ambiguous = [
-        (filename, chain, sorted(sources))
-        for (filename, chain), sources in basename_sources.items()
-        if filename and len(sources) > 1
-    ]
-    if ambiguous:
-        filename, chain, sources = ambiguous[0]
-        raise ValueError(
-            "ambiguous barrel decisions for duplicate filename/chain "
-            f"({filename!r}, {chain!r}); use unique source_path values. Sources: {sources}"
-        )
     return decisions
 
 
@@ -476,6 +460,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Python: {summary['python']} ({summary['python_executable']})")
             print(f"DSSP: {summary['dssp']}")
             if summary["dssp"] == "not found":
+                print(dssp_requirement_message(), file=sys.stderr)
                 raise SystemExit(2)
             return
 

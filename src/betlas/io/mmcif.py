@@ -109,6 +109,21 @@ def _normalize_ins_code(value: str | None) -> str:
     return "" if value in {"", ".", "?"} else value
 
 
+def _display_model_id(value: str | None) -> str:
+    value = "" if value is None else str(value).strip()
+    if value in {"", ".", "?"}:
+        return "0"
+    parsed = _safe_int(value)
+    if parsed is None:
+        return value
+    return str(max(0, parsed - 1))
+
+
+def _model_sort_key(value: str) -> tuple[bool, int, str]:
+    parsed = _safe_int(value)
+    return (parsed is None, 0 if parsed is None else parsed, value)
+
+
 def parse_residue_ranges(chopping: str, fallback_chain_id: str = "") -> list[tuple[str, int, int]]:
     ranges: list[tuple[str, int, int]] = []
     for part in str(chopping).split(","):
@@ -175,8 +190,14 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
     auth_atom = _list_value(mmcif, "_atom_site.auth_atom_id")
     comp_id = _list_value(mmcif, "_atom_site.label_comp_id")
     ins_codes = _list_value(mmcif, "_atom_site.pdbx_PDB_ins_code")
+    model_nums = _list_value(mmcif, "_atom_site.pdbx_PDB_model_num")
 
     n = len(auth_asym)
+    if n == 0:
+        raise ValueError(
+            "mmCIF contains no _atom_site.auth_asym_id rows; Betlas cannot inspect chains in an empty "
+            "or malformed structure file"
+        )
     if not group or len(group) != n:
         group = ["ATOM"] * n
     if not label_asym or len(label_asym) != n:
@@ -185,9 +206,12 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
         auth_atom = label_atom
     if not ins_codes or len(ins_codes) != n:
         ins_codes = ["?"] * n
+    if not model_nums or len(model_nums) != n:
+        model_nums = [""] * n
 
     residues_by_chain: dict[str, set[tuple[int, str]]] = defaultdict(set)
     labels_by_chain: dict[str, set[str]] = defaultdict(set)
+    model_ids_by_chain: dict[str, set[str]] = defaultdict(set)
     insertion_counts: dict[str, int] = defaultdict(int)
     nonpolymer_counts: dict[str, int] = defaultdict(int)
     protein_like_hetatm_counts: dict[str, int] = defaultdict(int)
@@ -196,6 +220,7 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
         if not chain:
             continue
         labels_by_chain[chain].add(label_asym[i])
+        model_ids_by_chain[chain].add(_display_model_id(model_nums[i]))
         atom_name = (auth_atom[i] or label_atom[i]).strip().upper()
         residue_name = comp_id[i].strip().upper() if i < len(comp_id) else ""
         group_name = group[i].strip().upper()
@@ -286,6 +311,7 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
             {
                 "auth_chain_id": chain,
                 "label_chain_ids": sorted(label for label in labels_by_chain.get(chain, set()) if label),
+                "model_ids": sorted(model_ids_by_chain.get(chain, {"0"}), key=_model_sort_key),
                 "standard_ca_residue_count": int(residue_count),
                 "sheet_annotation_available": bool(has_sheet),
                 "helix_conf_annotation_available": bool(has_conf),
@@ -356,8 +382,6 @@ def _selected_ca_records(
             continue
         seq_id = _safe_int(auth_seq[i])
         if seq_id is None:
-            if ranges:
-                continue
             seq_id = _require_numeric_auth_seq(
                 auth_seq[i],
                 context=f"atom_site.auth_seq_id for chain {chain_id}",
