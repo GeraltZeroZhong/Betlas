@@ -4,7 +4,7 @@ asset_type: official_readout_bundle
 readout: beta_barrel_detection
 profile: betlas_151_layer_radial16_official
 release_status: pending_release
-bundle: betlas-assets-v1.0.0.zip
+bundle: pending-local-mirror.zip
 bundle_subdir: beta_barrel_detection/official
 generated_by:
   - scripts/reproducibility/readout_benchmarks/beta_barrel_detection/run_betlas151_layer_radial16_official.py

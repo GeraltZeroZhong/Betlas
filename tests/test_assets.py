@@ -209,6 +209,34 @@ def test_pending_asset_download_requires_explicit_mirror(tmp_path: Path, monkeyp
     assert download_asset("pending-asset", cache_dir=tmp_path / "cache")[0].read_bytes() == data
 
 
+def test_pending_asset_verify_guides_download_not_verify_base_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest_root = _write_manifest(
+        tmp_path,
+        asset_id="pending-asset",
+        filename="tiny.txt",
+        data=b"pending\n",
+        release_status="pending_release",
+    )
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
+    monkeypatch.delenv("BETLAS_ASSET_BASE_URL", raising=False)
+
+    with pytest.raises(AssetError) as exc:
+        verify_asset("pending-asset", cache_dir=tmp_path / "cache", strict=True)
+    message = str(exc.value)
+    assert "betlas assets download pending-asset --base-url <local mirror>" in message
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(["assets", "verify", "pending-asset", "--cache-dir", str(tmp_path / "cache")])
+    assert exit_info.value.code == 2
+    text = capsys.readouterr().out
+    assert "tiny.txt\tfailed\tmissing" in text
+    assert "cache=" in text
+
+
 def test_asset_manifest_rejects_unsafe_download_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     manifest_root = _write_manifest(
         tmp_path,
@@ -382,6 +410,16 @@ def test_assets_cli_help_and_json_describe(capsys: pytest.CaptureFixture[str]) -
     assert "purpose=" in text
 
 
+def test_pending_official_assets_do_not_advertise_v1_release_bundle() -> None:
+    for asset_id in (
+        "betlas-beta-barrel-detection-official-v1",
+        "betlas-beta-barrel-staves-official-v1",
+    ):
+        manifest = describe_asset(asset_id)
+        assert manifest["release_status"] == "pending_release"
+        assert "betlas-assets-v1.0.0" not in str(manifest["bundle"])
+
+
 def test_staves_official_manifest_covers_runner_required_inputs() -> None:
     manifest = describe_asset("betlas-beta-barrel-staves-official-v1")
     filenames = {str(item["filename"]) for item in manifest["files"]}
@@ -457,3 +495,79 @@ def test_detection_fixed_runner_consumes_cached_feature_and_layer_inputs(tmp_pat
     assert layer_manifest["feature"].tolist() == ["layer_radial16__decision_score"]
     assert (paths.out_dir / "betlas_151_chain_features.csv").exists()
     assert (paths.out_dir / "layer_radial16_feature_values.csv").exists()
+
+
+def test_detection_fixed_runner_aligns_generated_caches_before_reuse(tmp_path: Path) -> None:
+    cohort = pd.DataFrame(
+        [
+            {"record_id": "r1", "filename": "one.cif"},
+            {"record_id": "r2", "filename": "two.cif"},
+        ]
+    )
+    paths = ReadoutPaths(out_dir=tmp_path / "out")
+    paths.out_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"record_id": "r2", "betlas_axis_best_angular_coverage": 0.2},
+            {"record_id": "r1", "betlas_axis_best_angular_coverage": 0.1},
+        ]
+    ).to_csv(paths.out_dir / "betlas_151_chain_features.csv", index=False)
+    pd.DataFrame(
+        [
+            {"record_id": "r2", "layer_radial16__decision_score": 0.8},
+            {"record_id": "r1", "layer_radial16__decision_score": 0.7},
+        ]
+    ).to_csv(paths.out_dir / "layer_radial16_feature_values.csv", index=False)
+    pd.DataFrame([{"feature": "layer_radial16__decision_score"}]).to_csv(
+        paths.out_dir / "layer_radial16_feature_manifest.csv",
+        index=False,
+    )
+
+    features = build_or_load_betlas_151(
+        paths=paths,
+        cohort=cohort,
+        feature_columns=["betlas_axis_best_angular_coverage"],
+    )
+    layer_values, _manifest = build_or_load_layer_radial16(paths=paths, cohort=cohort)
+
+    assert features["record_id"].tolist() == ["r1", "r2"]
+    assert layer_values["record_id"].tolist() == ["r1", "r2"]
+
+
+def test_detection_fixed_runner_uses_explicit_chain_results_csv(tmp_path: Path) -> None:
+    chain_results = tmp_path / "custom_chain_results.csv"
+    pd.DataFrame(
+        [
+            {
+                "filename": "one.cif",
+                "chain": "A",
+                "result": "BARREL",
+                "decision_score": 9.5,
+                "score_raw": 1.0,
+                "score_adjust": 2.0,
+                "chain_residues": 100,
+                "sheet_residues": 80,
+            }
+        ]
+    ).to_csv(chain_results, index=False)
+    cohort = pd.DataFrame(
+        [
+            {
+                "record_id": "r1",
+                "filename": "one.cif",
+                "selected_chain_id": "A",
+            }
+        ]
+    )
+    paths = ReadoutPaths(
+        out_dir=tmp_path / "out",
+        chain_results_csv=chain_results,
+        betlas_beta_root=tmp_path / "missing_default_root",
+    )
+
+    values, manifest = build_or_load_layer_radial16(paths=paths, cohort=cohort)
+
+    assert values.loc[0, "record_id"] == "r1"
+    assert values.loc[0, "layer_radial16_source"] == "selected_chain"
+    assert values.loc[0, "layer_radial16__decision_score"] == 9.5
+    assert "layer_radial16__decision_score" in set(manifest["feature"])

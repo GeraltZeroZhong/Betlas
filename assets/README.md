@@ -29,9 +29,8 @@ names, SHA-256 checksums, byte sizes, release status, and release-relative
 download paths. `pending_release` means the manifest is available but the
 payload is not yet promised at the default release base.
 The fixed-cohort detection and staves companion runners consume the cached
-files named in these manifests; while assets are pending, they do not rebuild
-official cohorts from hidden external directories unless the caller supplies
-those inputs explicitly.
+files named in these manifests; while assets are pending, they require a caller
+supplied local mirror or explicit input paths for those fixed-cohort files.
 
 Download only after `betlas assets describe ...` reports a published payload or
 after `BETLAS_ASSET_BASE_URL` points to a local mirror:

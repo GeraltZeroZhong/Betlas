@@ -60,6 +60,8 @@ def test_benchmark_preflight_fails_fast_for_missing_rule_scores(tmp_path) -> Non
         )
 
     preflight = pd.read_json(out_dir / "benchmark_preflight.json", typ="series")
+    assert preflight["status"] == "failed"
+    assert preflight["failure_stage"] == "feature_schema"
     assert preflight["feature_set"] == "raw_geometry"
     assert preflight["rule_score_columns_present"] is False
     assert preflight["group_columns_priority"] == ["cath_s35_cluster_id", "cath_homology_code", "pdb_id"]
@@ -74,7 +76,7 @@ def test_grouped_splits_fail_when_test_folds_cannot_cover_observed_classes() -> 
         make_grouped_splits(x, y, groups, n_splits=3, random_state=13)
 
 
-def test_benchmark_writes_preflight_when_grouped_splits_fail(tmp_path) -> None:
+def test_benchmark_writes_preflight_when_global_classes_missing(tmp_path) -> None:
     features = tmp_path / "features.csv"
     out_dir = tmp_path / "benchmark"
     pd.DataFrame(
@@ -92,12 +94,46 @@ def test_benchmark_writes_preflight_when_grouped_splits_fail(tmp_path) -> None:
         ]
     ).to_csv(features, index=False)
 
-    with pytest.raises(ValueError, match="complete class coverage"):
+    with pytest.raises(ValueError, match="missing global classes"):
         run_grouped_benchmark(features, out_dir, n_splits=3)
 
     preflight = pd.read_json(out_dir / "benchmark_preflight.json", typ="series")
-    assert preflight["effective_split_strategy"] == "split_failed"
-    assert "complete class coverage" in preflight["split_error"]
+    assert preflight["effective_split_strategy"] == "not_run_missing_global_classes"
+    assert set(preflight["missing_global_classes"]) == set(FOLD_LABELS[3:])
+
+
+def test_benchmark_grouped_cv_is_structure_disjoint_even_with_unique_cath_groups(tmp_path) -> None:
+    features = tmp_path / "features.csv"
+    out_dir = tmp_path / "benchmark"
+    rows = []
+    for pdb_id in ["1aaa", "2bbb"]:
+        for idx, label in enumerate(FOLD_LABELS):
+            rows.append(
+                {
+                    "record_id": f"{pdb_id}_{idx}",
+                    "pdb_id": pdb_id,
+                    "domain_id": f"{pdb_id}_{idx}",
+                    "cath_s35_cluster_id": f"{pdb_id}_unique_s35_{idx}",
+                    "fold_label_final": label,
+                    "betlas_parse_ok": 1,
+                    "betlas_axis_best_angular_coverage": float(idx + 1),
+                }
+            )
+    pd.DataFrame(rows).to_csv(features, index=False)
+
+    run_grouped_benchmark(
+        features,
+        out_dir,
+        n_splits=2,
+        config={"models": {"include": ["random_forest"]}, "random_forest": {"n_estimators": 5, "n_jobs": 1}},
+    )
+
+    oof = pd.read_csv(out_dir / "oof_predictions.csv")
+    assert oof.groupby("pdb_id")["fold"].nunique().to_dict() == {"1aaa": 1, "2bbb": 1}
+    assert set(oof["probability_source"]) == {"predict_proba"}
+    assert set(oof["probability_calibration_status"]) == {"model_reported_uncalibrated"}
+    preflight = pd.read_json(out_dir / "benchmark_preflight.json", typ="series")
+    assert preflight["grouping_strategy"] == "connected_components_across_group_columns"
 
 
 def test_benchmark_and_ablation_write_failed_preflight_for_invalid_feature_schema(tmp_path) -> None:
@@ -129,7 +165,7 @@ def test_benchmark_and_ablation_write_failed_preflight_for_invalid_feature_schem
     assert ablation_preflight["failure_stage"] == "feature_schema"
 
 
-def test_ablation_writes_preflight_when_grouped_splits_fail(tmp_path) -> None:
+def test_ablation_writes_preflight_when_global_classes_missing(tmp_path) -> None:
     features = tmp_path / "features.csv"
     out_dir = tmp_path / "ablation"
     pd.DataFrame(
@@ -147,12 +183,12 @@ def test_ablation_writes_preflight_when_grouped_splits_fail(tmp_path) -> None:
         ]
     ).to_csv(features, index=False)
 
-    with pytest.raises(ValueError, match="complete class coverage"):
+    with pytest.raises(ValueError, match="missing global classes"):
         run_ablation_suite(features, out_dir, n_splits=3)
 
     preflight = pd.read_json(out_dir / "ablation_preflight.json", typ="series")
-    assert preflight["effective_split_strategy"] == "split_failed"
-    assert "complete class coverage" in preflight["split_error"]
+    assert preflight["effective_split_strategy"] == "not_run_missing_global_classes"
+    assert set(preflight["missing_global_classes"]) == set(FOLD_LABELS[3:])
 
 
 def test_predict_proba_alignment_maps_estimator_classes_to_global_columns() -> None:
@@ -169,6 +205,22 @@ def test_predict_proba_alignment_maps_estimator_classes_to_global_columns() -> N
 
     assert aligned.tolist() == [[0.75, 0.0, 0.25]]
     assert any("omitted classes" in warning for warning in warnings)
+
+
+def test_predict_proba_alignment_uses_classes_even_when_column_count_matches() -> None:
+    class Estimator:
+        classes_ = [2, 0, 1]
+
+    aligned, warnings = _align_predict_proba(
+        pd.DataFrame([[0.20, 0.50, 0.30]]).to_numpy(),
+        Estimator(),
+        labels=["a", "b", "c"],
+        model_name="unit",
+        fold=1,
+    )
+
+    assert aligned.tolist() == [[0.50, 0.30, 0.20]]
+    assert warnings == []
 
 
 def test_benchmark_writes_preflight_before_xgboost_missing_error(tmp_path, monkeypatch) -> None:

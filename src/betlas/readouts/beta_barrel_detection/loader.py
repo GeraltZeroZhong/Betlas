@@ -2,12 +2,14 @@ import gzip
 import os
 import re
 import string
+import subprocess
 import tempfile
 import warnings
 
 from Bio import BiopythonWarning
-from Bio.PDB import PDBIO, MMCIFParser, PDBParser, Select
+from Bio.PDB import MMCIFIO, PDBIO, MMCIFParser, PDBParser, Select
 from Bio.PDB.DSSP import DSSP
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from Bio.PDB.Polypeptide import is_aa
 
 from .exceptions import ChainNotFoundError, DsspError, InputValidationError, StructureParseError
@@ -167,6 +169,77 @@ class _ProteinOnlySelect(Select):
         return 1
 
 
+def _mmcif_value_list(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _normalize_mmcif_ins_code(value: str) -> str:
+    return " " if value in {"", ".", "?"} else value
+
+
+def _atom_site_label_to_auth_residue_map(
+    cif_path: str,
+) -> dict[tuple[str, str], tuple[str, tuple[str, int, str]]]:
+    mmcif = MMCIF2Dict(cif_path)
+    label_asym_ids = _mmcif_value_list(mmcif.get("_atom_site.label_asym_id"))
+    label_seq_ids = _mmcif_value_list(mmcif.get("_atom_site.label_seq_id"))
+    auth_asym_ids = _mmcif_value_list(mmcif.get("_atom_site.auth_asym_id"))
+    auth_seq_ids = _mmcif_value_list(mmcif.get("_atom_site.auth_seq_id"))
+    insertion_codes = _mmcif_value_list(mmcif.get("_atom_site.pdbx_PDB_ins_code"))
+    if len(insertion_codes) != len(label_asym_ids):
+        insertion_codes = ["?"] * len(label_asym_ids)
+
+    mapping: dict[tuple[str, str], tuple[str, tuple[str, int, str]]] = {}
+    for label_asym, label_seq, auth_asym, auth_seq, insertion_code in zip(
+        label_asym_ids,
+        label_seq_ids,
+        auth_asym_ids,
+        auth_seq_ids,
+        insertion_codes,
+        strict=False,
+    ):
+        if label_seq in {"", ".", "?"} or auth_seq in {"", ".", "?"}:
+            continue
+        try:
+            residue_number = int(auth_seq)
+        except ValueError:
+            continue
+        mapping.setdefault(
+            (label_asym, label_seq),
+            (auth_asym, (" ", residue_number, _normalize_mmcif_ins_code(insertion_code))),
+        )
+    return mapping
+
+
+def _dssp_mmcif_summary_to_secondary_structure(
+    mmcif: dict[str, object],
+    label_to_auth_residue: dict[tuple[str, str], tuple[str, tuple[str, int, str]]],
+) -> dict[tuple[str, tuple[str, int, str]], str]:
+    label_asym_ids = _mmcif_value_list(mmcif.get("_dssp_struct_summary.label_asym_id"))
+    label_seq_ids = _mmcif_value_list(mmcif.get("_dssp_struct_summary.label_seq_id"))
+    secondary_structures = _mmcif_value_list(
+        mmcif.get("_dssp_struct_summary.secondary_structure")
+    )
+
+    secondary_structure: dict[tuple[str, tuple[str, int, str]], str] = {}
+    for label_asym, label_seq, ss_code in zip(
+        label_asym_ids,
+        label_seq_ids,
+        secondary_structures,
+        strict=False,
+    ):
+        mapped = label_to_auth_residue.get((label_asym, label_seq))
+        if mapped is None:
+            continue
+        auth_asym, residue_id = mapped
+        secondary_structure[(auth_asym, residue_id)] = "-" if ss_code in {".", "?"} else ss_code
+    return secondary_structure
+
+
 class ProteinLoader:
     """
     Load PDB/mmCIF structures, run DSSP, and extract per-chain CA data.
@@ -250,9 +323,20 @@ class ProteinLoader:
                 except OSError:
                     pass
 
-    def _export_protein_only_pdb(self) -> str:
+    def _has_multichar_chain_ids(self) -> bool:
+        return any(len(str(chain.id)) > 1 for chain in self.model.get_chains())
+
+    def _export_protein_only_structure(self) -> str:
         _sanitize_blank_chain_ids(self.model)
         _fill_missing_atom_elements(self.model)
+
+        if self._structure_file_type == "MMCIF" and self._has_multichar_chain_ids():
+            fd, tmp_path = tempfile.mkstemp(suffix=".cif")
+            os.close(fd)
+            io = MMCIFIO()
+            io.set_structure(self.model)
+            io.save(tmp_path, select=_ProteinOnlySelect())
+            return tmp_path
 
         fd, tmp_path = tempfile.mkstemp(suffix=".pdb")
         with os.fdopen(fd, "w") as handle:
@@ -270,14 +354,58 @@ class ProteinLoader:
         file_type: str = "PDB",
     ) -> dict[tuple[str, tuple[str, int, str]], str]:
         dssp_bin = require_dssp_binary(self.dssp_bin)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=_DSSP_PDB_MMCIF_WARNING_PATTERN,
-                category=UserWarning,
-            )
-            dssp_result = DSSP(self.model, tmp_path, dssp=dssp_bin, file_type=file_type)
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=_DSSP_PDB_MMCIF_WARNING_PATTERN,
+                    category=UserWarning,
+                )
+                dssp_result = DSSP(self.model, tmp_path, dssp=dssp_bin, file_type=file_type)
+        except Exception:
+            if tmp_path.lower().endswith((".cif", ".mmcif")):
+                return self._run_dssp_mmcif_output(tmp_path, dssp_bin)
+            raise
         return {dssp_key: str(dssp_result[dssp_key][2]) for dssp_key in dssp_result.keys()}
+
+    def _run_dssp_mmcif_output(
+        self,
+        tmp_path: str,
+        dssp_bin: str,
+    ) -> dict[tuple[str, tuple[str, int, str]], str]:
+        label_to_auth_residue = _atom_site_label_to_auth_residue_map(tmp_path)
+        result = subprocess.run(
+            [dssp_bin, tmp_path],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.stderr.strip():
+            warnings.warn(result.stderr.strip(), UserWarning, stacklevel=2)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"{dssp_bin} exited {result.returncode}")
+        if not result.stdout.strip():
+            raise RuntimeError("DSSP failed to produce an mmCIF output")
+
+        fd, dssp_mmcif_path = tempfile.mkstemp(suffix=".dssp.cif")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(result.stdout)
+            mmcif = MMCIF2Dict(dssp_mmcif_path)
+        finally:
+            if os.path.exists(dssp_mmcif_path):
+                try:
+                    os.remove(dssp_mmcif_path)
+                except OSError:
+                    pass
+
+        secondary_structure = _dssp_mmcif_summary_to_secondary_structure(
+            mmcif,
+            label_to_auth_residue,
+        )
+        if not secondary_structure:
+            raise RuntimeError("DSSP mmCIF output did not contain residue summaries")
+        return secondary_structure
 
     def _run_secondary_structure(self):
         if self.secondary_structure is not None:
@@ -285,17 +413,9 @@ class ProteinLoader:
 
         tmp_path = None
         try:
-            if self._structure_file_type == "MMCIF":
-                # Keep mmCIF chain identifiers intact. Exporting to PDB would
-                # fail for valid multi-character chain IDs and bias mmCIF runs.
-                tmp_path = _decompress_gzip_to_temp_if_needed(self.file_path)
-                dssp_input = tmp_path or self.file_path
-                self.secondary_structure = self._run_dssp(dssp_input, file_type="MMCIF")
-            else:
-                # Export protein ATOM records only. Dropping HETATM helps avoid
-                # nonpoly_scheme strand/duplicate key issues in PDB mode.
-                tmp_path = self._export_protein_only_pdb()
-                self.secondary_structure = self._run_dssp(tmp_path, file_type="PDB")
+            tmp_path = self._export_protein_only_structure()
+            file_type = "MMCIF" if tmp_path.lower().endswith((".cif", ".mmcif")) else "PDB"
+            self.secondary_structure = self._run_dssp(tmp_path, file_type=file_type)
 
         except Exception as e:
             self.secondary_structure_error = f"DSSP failed for {os.path.basename(self.file_path)}: {e}"

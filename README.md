@@ -28,7 +28,7 @@ flowchart LR
 | One annotated `.cif` or `.mmcif` chain | One-row feature CSV plus manifest | Single-structure grammar analysis |
 | Feature CSV | Rule-score CSV plus manifest | Transparent fold-rule inspection |
 | Annotated structure chain | Slice summary, slice rows, residue-traceable points | Auditing slice-dependent grammars |
-| Feature and label CSV | Benchmark metrics, OOF predictions, preflight JSON | Model and feature evaluation |
+| Feature and label CSV | Benchmark metrics, out-of-fold prediction CSV, preflight JSON | Model and feature evaluation |
 | PDB/mmCIF files | Beta-barrel-like chain decisions | Geometry readout screening |
 | Detection CSV plus structures | Candidate stave-count table | Strand/stave evidence for barrel-like chains |
 | Packaged asset manifests | Verified cached files | Fixed-cohort readout workflows |
@@ -45,9 +45,10 @@ python -m pip install -e .
 betlas --help
 ```
 
-Optional extras are installed only for the workflows that need them:
-`.[ml]` for tuned XGBoost benchmark configs, `.[fixed-cohort]` for CatBoost
-companion runners, and `.[dev]` for local test/build tooling.
+Optional extras are installed only for packaged workflows that need them:
+`.[ml]` for tuned XGBoost benchmark configs and `.[dev]` for local test/build
+tooling. Repository companion fixed-cohort runners are source-tree workflows;
+install CatBoost explicitly for those runs with `python -m pip install catboost`.
 
 For a local wheel built from this source tree:
 
@@ -75,6 +76,7 @@ Runtime requirements:
 Check DSSP availability:
 
 ```bash
+conda install -c conda-forge dssp
 betlas readout beta-barrel-detection --check-env
 betlas readout beta-barrel-staves --check-env
 ```
@@ -85,7 +87,7 @@ betlas readout beta-barrel-staves --check-env
 | --- | --- | --- |
 | Annotated mmCIF with `_struct_sheet_range` records | `betlas extract-features --structure STRUCTURE.cif --chain A --out runs/features.csv` | Best path for grammar features and slice evidence. |
 | PDB or AlphaFold-style structure without sheet records | `betlas readout beta-barrel-detection STRUCTURE.pdb --out runs/detection.csv` | DSSP-based readouts can operate on PDB/mmCIF inputs. Grammar extraction expects mmCIF sheet annotations. |
-| CATH source files | `betlas build-dataset --all-eligible --out runs/labels.csv` | Produces labels and grouping columns for benchmarks. |
+| CATH source files | `betlas build-dataset --all-eligible --out runs/labels.csv` | Produces labels and grouping columns for benchmarks. If required files are absent from `--cath-dir`, Betlas downloads current CATH daily files; use a pinned local mirror for reproducible release runs. |
 | Feature CSV with labels | `betlas benchmark --features runs/features.csv --out-dir runs/benchmark` | Rows with `betlas_parse_ok != 1` are filtered from benchmark fits. |
 | Feature CSV without labels | `betlas grammar score --features runs/features.csv --out runs/rule_scores.csv` | Requires parse-ok rows and grammar input columns by default. |
 | Prediction CSV from another model | `betlas readout topology-diagnostics --features runs/features.csv --predictions runs/predictions.csv --out runs/topology.csv` | Explicit missing prediction files fail. |
@@ -220,8 +222,9 @@ print(len(list_column_specs()))
 
 Topology diagnostics can consume an optional prediction table. It should
 contain a join key such as `record_id` or `domain_id`, a `model` column when
-multiple models are present, and probability columns named
-`prob_<fold_label>`. If `--predictions` is omitted, Betlas derives
+multiple models are present, and either probability-like columns named
+`prob_<fold_label>` or a top-label confidence column named `pred_probability`.
+If `--predictions` is omitted, Betlas derives
 uncalibrated rule-softmax weights from transparent rule scores and marks the
 source/calibration columns accordingly. If `--predictions PATH` is provided and
 the file is missing, the command fails.
@@ -309,6 +312,14 @@ support, uses `0` for `NON_BARREL` rows, and keeps raw geometry in `score_raw`
 and `score_adjust`. `decision_score` and staves `confidence` are deterministic
 heuristic evidence scores, not calibrated probabilities.
 
+The `--barrel-decisions` CSV gate is a conservative post-hoc output gate: the
+staves pipeline still prepares/analyzes rows, then reports non-filtered candidate stave counts
+only for matching detection `BARREL` rows. Detection `ERROR` rows remain error
+status in the gated staves output.
+Candidate staves are DSSP-run supported readouts. For stricter exploratory
+staves analysis, use an override such as
+`analyzer.layer.require_geometric_consistency=true`.
+
 ### Benchmark And Ablation
 
 ```bash
@@ -388,6 +399,23 @@ from betlas import describe_readout_column, list_readout_column_specs
 
 print(describe_readout_column("decision_score", "beta-barrel-detection").definition)
 print(len(list_readout_column_specs("beta-barrel-staves")))
+```
+
+Readouts are also available from Python. The staves API writes no CSV unless
+`output=` or `write_csv=True` is supplied:
+
+```python
+from betlas import count_beta_barrel_staves, detect_beta_barrel_like
+
+detection = detect_beta_barrel_like("structure.cif", output="runs/detection.csv")
+staves = count_beta_barrel_staves(
+    "structure.cif",
+    barrel_decisions="runs/detection.csv",
+    output="runs/staves.csv",
+)
+
+# Target one chain from Python with the same config key used by the CLI.
+chain_a = detect_beta_barrel_like("structure.cif", overrides=["input.chain_id=A"])
 ```
 
 ## Assets And Reproducibility

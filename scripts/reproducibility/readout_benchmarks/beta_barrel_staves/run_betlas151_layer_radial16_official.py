@@ -128,9 +128,25 @@ def parse_args() -> argparse.Namespace:
             "or a BETLAS_ASSET_BASE_URL-compatible mirror."
         ),
     )
-    parser.add_argument("--aligned-dir", type=Path, default=DEFAULT_ALIGNED_DIR)
+    parser.add_argument(
+        "--aligned-dir",
+        type=Path,
+        default=DEFAULT_ALIGNED_DIR,
+        help=(
+            "Directory containing fixed-cohort aligned input CSV/NPZ files. "
+            "Clean clones should prefer --download-assets with a local mirror or --asset-id after caching."
+        ),
+    )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
-    parser.add_argument("--layer-values-csv", type=Path, default=DEFAULT_LAYER_VALUES_CSV)
+    parser.add_argument(
+        "--layer-values-csv",
+        type=Path,
+        default=DEFAULT_LAYER_VALUES_CSV,
+        help=(
+            "LayerRadial16 feature-values CSV. Clean clones should prefer --download-assets "
+            "with a local mirror or --asset-id after caching."
+        ),
+    )
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--jobs", type=int, default=-1)
@@ -149,7 +165,11 @@ def display_path(path: Path) -> str:
 
 def _require_file(path: Path, *, label: str) -> Path:
     if not path.exists():
-        raise FileNotFoundError(f"{label} does not exist: {path}")
+        raise FileNotFoundError(
+            f"{label} does not exist: {path}. This companion runner needs the fixed-cohort "
+            "asset payload; use --download-assets with BETLAS_ASSET_BASE_URL=<local mirror>, "
+            "use --asset-id after caching, or pass explicit local input paths."
+        )
     if not path.is_file():
         raise FileNotFoundError(f"{label} is not a file: {path}")
     return path
@@ -447,6 +467,8 @@ def evaluate(
     per_record["model_err"] = predictions - y
     per_record["abs_err"] = np.abs(predictions - y)
     per_record["probability_max"] = probabilities
+    per_record["probability_source"] = "catboost_predict_proba"
+    per_record["probability_calibration_status"] = "model_reported_uncalibrated"
     per_record["include_esmc"] = bool(include_esmc)
     per_record["layer_radial16_feature_count"] = int(len(layer_columns))
     return Evaluation(metrics, pd.DataFrame(fold_rows), per_record, estimators)
@@ -541,7 +563,7 @@ def write_summary(
         f"- Classifier: CatBoost multiclass with the fixed {n_records}-row mechanics denominator and fixed outer folds.",
         f"- ESM-C branch: cached mean embeddings, fold-local PCA{pca_dim}, and an embedding-availability indicator.",
         f"- LayerRadial16 input features are loaded from the active {n_records}-row LayerRadial16 input cache.",
-        "- `probability_max` is the estimator probability assigned to the predicted stave-count class.",
+        "- `probability_max` is the estimator-reported, uncalibrated probability assigned to the predicted stave-count class.",
         "",
         "## Official Models",
         "",
@@ -569,6 +591,25 @@ def write_summary(
 
 def _main() -> int:
     args = parse_args()
+    out_dir = args.out_dir.expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    preflight = {
+        "model_dependency_status": dependency_status(),
+        "required_model_dependency": "catboost",
+        "status": "ok",
+    }
+    if preflight["model_dependency_status"].get("catboost") != "available":
+        preflight["status"] = "failed"
+        (out_dir / "dependency_preflight.json").write_text(
+            json.dumps(preflight, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        require_catboost(preflight["model_dependency_status"])
+    (out_dir / "dependency_preflight.json").write_text(
+        json.dumps(preflight, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     asset_id = args.asset_id or (DEFAULT_ASSET_ID if args.download_assets else None)
     asset_cache_dir = args.asset_cache_dir.expanduser().resolve() if args.asset_cache_dir else None
     aligned_dir = args.aligned_dir.expanduser().resolve()
@@ -599,25 +640,7 @@ def _main() -> int:
                 filenames=selected_asset_files,
                 strict=True,
             )
-    out_dir = args.out_dir.expanduser().resolve()
     _validate_inputs(aligned_dir=aligned_dir, layer_values_csv=layer_values_csv)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    preflight = {
-        "model_dependency_status": dependency_status(),
-        "required_model_dependency": "catboost",
-        "status": "ok",
-    }
-    if preflight["model_dependency_status"].get("catboost") != "available":
-        preflight["status"] = "failed"
-        (out_dir / "dependency_preflight.json").write_text(
-            json.dumps(preflight, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        require_catboost(preflight["model_dependency_status"])
-    (out_dir / "dependency_preflight.json").write_text(
-        json.dumps(preflight, indent=2) + "\n",
-        encoding="utf-8",
-    )
 
     rows = load_rows(aligned_dir)
     x151, columns151 = load_151(aligned_dir, rows)
@@ -701,6 +724,9 @@ def _main() -> int:
         wide[f"{key}__pred"] = evaluation.per_record["model_pred"].to_numpy(dtype=int)
         wide[f"{key}__err"] = evaluation.per_record["model_err"].to_numpy(dtype=int)
         wide[f"{key}__probability_max"] = evaluation.per_record["probability_max"].to_numpy(float)
+        wide[f"{key}__probability_calibration_status"] = evaluation.per_record[
+            "probability_calibration_status"
+        ].to_numpy(dtype=object)
     wide.to_csv(out_dir / "official_per_record_wide.csv", index=False)
 
     permutation = pd.DataFrame()
@@ -738,7 +764,8 @@ def _main() -> int:
         "permutation_repeats": int(args.permutation_repeats),
         "esmc_cache_status": "mean embeddings reused from aligned Betlas cache",
         "layer_feature_source": display_path(layer_values_csv),
-        "probability_max_definition": "Estimator probability assigned to the predicted stave-count class.",
+        "probability_max_definition": "Estimator-reported, uncalibrated probability assigned to the predicted stave-count class.",
+        "probability_calibration_status": "model_reported_uncalibrated",
         "dependency_preflight": "dependency_preflight.json",
         "model_dependency_status": preflight["model_dependency_status"],
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),

@@ -97,13 +97,15 @@ class ProteinSlicer:
         if n < 2:
             return {}
 
-        # 1) Preprocess beta-sheet flags by filling one-residue holes.
-        sheet_flags = [bool(r.get("is_sheet", False)) for r in residues_data]
+        # 1) Keep strand identities anchored to original DSSP beta runs. Short
+        # hole filling may help segment continuity, but it must not merge two
+        # original beta runs across a non-beta residue into one stave candidate.
+        original_sheet_flags = np.asarray([bool(r.get("is_sheet", False)) for r in residues_data], dtype=bool)
         sheet_flags = self._fill_short_holes(
-            sheet_flags,
+            original_sheet_flags,
             max_hole_len=self.fill_sheet_hole_length,
         )
-        sheet_run_ids, sheet_run_seq_pos = self._assign_sheet_runs(sheet_flags)
+        sheet_run_ids, sheet_run_seq_pos = self._assign_sheet_runs(original_sheet_flags)
 
         # 2) Determine the slice index range. Use integer k to avoid accumulating
         # floating-point error.
@@ -124,12 +126,26 @@ class ProteinSlicer:
         slices = defaultdict(list)
         # 3) Walk residue segments and compute intersections with each z-plane.
         for i in range(n - 1):
-            # Keep only segments that stay inside one contiguous beta-sheet run.
+            # Keep segments supported by filled beta flags, but keep strand IDs
+            # anchored to original DSSP runs. A short E-X-E dropout can
+            # contribute two adjacent segments with two run IDs; it is never
+            # collapsed into one stave candidate.
             if not (sheet_flags[i] and sheet_flags[i + 1]):
                 continue
 
-            strand_id = int(sheet_run_ids[i])
-            if strand_id < 0 or strand_id != int(sheet_run_ids[i + 1]):
+            original_left = bool(original_sheet_flags[i])
+            original_right = bool(original_sheet_flags[i + 1])
+            if original_left and original_right:
+                strand_id = int(sheet_run_ids[i])
+                if strand_id < 0 or strand_id != int(sheet_run_ids[i + 1]):
+                    continue
+            elif original_left:
+                strand_id = int(sheet_run_ids[i])
+            elif original_right:
+                strand_id = int(sheet_run_ids[i + 1])
+            else:
+                continue
+            if strand_id < 0:
                 continue
 
             p1 = aligned_coords[i]

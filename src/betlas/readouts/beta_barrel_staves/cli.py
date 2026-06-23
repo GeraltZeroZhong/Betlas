@@ -13,7 +13,7 @@ from omegaconf.errors import OmegaConfBaseException
 from ...provenance import file_state
 from .bootstrap import configure_thread_environment
 from .config import build_config
-from .constants import DEFAULT_RESULT_COLUMNS, RESULT_FILTERED_OUT
+from .constants import DEFAULT_RESULT_COLUMNS, RESULT_ERROR, RESULT_FILTERED_OUT
 from .exceptions import BetaBarrelStavesReadoutError
 from .io.metadata import build_run_metadata, default_metadata_path, write_run_metadata
 from .io.results import print_results_summary, write_results_csv
@@ -222,6 +222,19 @@ def _apply_barrel_decisions(
                 "barrel_gate_reason": str(decision.get("reason", "")),
             }
         )
+        if result.upper() == "ERROR":
+            updated.update(
+                {
+                    "result": RESULT_ERROR,
+                    "result_stage": "barrel_gate",
+                    "strand_count": 0,
+                    "confidence": 0.0,
+                    "reason": "Barrel gate source row was ERROR; candidate stave count not trusted.",
+                }
+            )
+            clear_filtered_count_fields(updated)
+            gated_rows.append(updated)
+            continue
         if not passed:
             updated.update(
                 {
@@ -287,7 +300,7 @@ def main(argv: list[str] | None = None) -> None:
             "  betlas readout beta-barrel-staves structures/ --barrel-decisions runs/detection.csv --workers 8 --prep 4 --out runs/staves.csv\n"
             "  betlas readout beta-barrel-staves input.path=structures/ output.csv=runs/staves.csv runtime.dssp_bin_path=mkdssp --allow-ungated\n"
             "  betlas readout beta-barrel-staves --check-env\n\n"
-            "Output CSV: one row per analyzed chain with candidate stave count, heuristic confidence, slice, geometry, and runtime-status columns.\n"
+            "Output CSV: one row per analyzed chain with candidate stave count, uncalibrated heuristic confidence, slice, geometry, and runtime-status columns.\n"
             "Stdout is progress/status text, not CSV; pass --out or output.csv=... for a CSV path. Default CSV: beta_barrel_staves_results.csv.\n"
             "Biological gate: pass --barrel-decisions from beta-barrel-detection, or pass --allow-ungated for explicit exploratory ungated counting.\n"
             "DSSP: pass runtime.dssp_bin_path=/path/to/mkdssp or use --check-env to verify availability.\n"

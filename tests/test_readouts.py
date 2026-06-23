@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import math
 from pathlib import Path
@@ -7,8 +8,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import betlas
+import betlas.readouts.beta_barrel_detection as detection_api
 import betlas.readouts.beta_barrel_detection.cli as detection_cli
 import betlas.readouts.beta_barrel_detection.pipeline as detection_pipeline
+import betlas.readouts.beta_barrel_staves as staves_api
 import betlas.readouts.beta_barrel_staves.cli as staves_cli
 from betlas.ml.benchmark import numeric_feature_columns
 from betlas.readouts import get_readout, list_readouts
@@ -24,19 +28,26 @@ from betlas.readouts.beta_barrel_detection.results import (
     write_results_csv as write_detection_results_csv,
 )
 from betlas.readouts.beta_barrel_staves import (
-    StrandCountAnalyzer,
     build_config,
     count_beta_barrel_staves,
     count_strands,
 )
+from betlas.readouts.beta_barrel_staves.analysis.analyzer import StrandCountAnalyzer
 from betlas.readouts.beta_barrel_staves.cli import _apply_barrel_decisions, _load_barrel_decisions
 from betlas.readouts.beta_barrel_staves.config import AnalyzerConfig
 from betlas.readouts.beta_barrel_staves.exceptions import DsspNotFoundError
+from betlas.readouts.beta_barrel_staves.geometry.slicer import ProteinSlicer
 from betlas.readouts.beta_barrel_staves.io.prepare_cache import (
     prepare_cache_path as staves_prepare_cache_path,
 )
 from betlas.readouts.beta_barrel_staves.io.prepare_cache import (
     store_prepare_payloads as store_staves_prepare_payloads,
+)
+from betlas.readouts.beta_barrel_staves.pipeline import (
+    _prepare_error_rows as staves_prepare_error_rows,
+)
+from betlas.readouts.beta_barrel_staves.pipeline.chain import (
+    analyze_chain_payload as analyze_staves_chain_payload,
 )
 from betlas.readouts.beta_barrel_staves.runtime import find_dssp_binary, require_dssp_binary
 from betlas.readouts.topology_diagnostics import (
@@ -103,6 +114,22 @@ def test_readout_registry_exposes_beta_barrel_staves():
     assert get_readout("beta-barrel-detection").summary.startswith("Betlas native")
     assert get_readout("beta-barrel-staves").summary.startswith("Secondary readout")
     assert get_readout("topology-ambiguity").summary.startswith("Boundary-region ambiguity")
+    assert "uncalibrated heuristic score" in get_readout("beta-barrel-detection").output_protocol
+    assert "uncalibrated heuristic confidence" in get_readout("beta-barrel-staves").output_protocol
+    assert "calibration status" in get_readout("topology-ambiguity").output_protocol
+
+
+def test_top_level_detection_api_alias_is_public() -> None:
+    assert isinstance(betlas.__version__, str)
+    assert "__version__" in betlas.__all__
+    assert betlas.detect_beta_barrel_like is detection_pipeline.detect
+
+
+def test_readout_subpackage_all_keeps_implementation_helpers_private() -> None:
+    implementation_helpers = {"ProteinLoader", "PCAAligner", "ProteinSlicer", "BarrelAnalyzer"}
+
+    assert not implementation_helpers.intersection(detection_api.__all__)
+    assert not implementation_helpers.intersection(staves_api.__all__)
 
 
 def test_beta_barrel_staves_config_defaults_are_betlas_owned():
@@ -116,6 +143,13 @@ def test_beta_barrel_staves_config_defaults_are_betlas_owned():
 def test_count_beta_barrel_staves_python_api_requires_gate_or_explicit_ungated() -> None:
     with pytest.raises(ValueError, match="requires barrel_decisions"):
         count_beta_barrel_staves("structure.cif", write_csv=False, print_summary=False)
+
+
+def test_count_beta_barrel_staves_python_api_defaults_do_not_write_current_directory() -> None:
+    signature = inspect.signature(count_beta_barrel_staves)
+
+    assert signature.parameters["write_csv"].default is None
+    assert signature.parameters["print_summary"].default is False
 
 
 def test_beta_barrel_staves_compat_api_requires_explicit_ungated() -> None:
@@ -162,8 +196,53 @@ def test_beta_barrel_detection_reports_dssp_error_before_sheet_prefilter() -> No
     assert "DSSP failed" in row["reason"]
 
 
+def test_beta_barrel_staves_reports_dssp_error_before_sheet_prefilter() -> None:
+    cfg = build_config()
+    residues = [
+        {"coord": (float(index), 0.0, 0.0), "is_sheet": False}
+        for index in range(int(cfg.input.min_chain_residues) + 1)
+    ]
+
+    row = analyze_staves_chain_payload(
+        {
+            "filename": "failed.cif",
+            "source_path": "/tmp/failed.cif",
+            "chain": "A",
+            "dssp_error": "DSSP failed for failed.cif: missing executable",
+            "residues_data": residues,
+        },
+        cfg,
+    )
+
+    assert row["result"] == "ERROR"
+    assert row["result_stage"] == "dssp"
+    assert "DSSP failed" in row["reason"]
+
+
+def test_staves_slicer_keeps_filled_gap_beta_runs_separate() -> None:
+    slicer = ProteinSlicer(step_size=1.0, fill_sheet_hole_length=1)
+    coords = [
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 1.0),
+        (2.0, 0.0, 2.0),
+    ]
+    residues = [{"is_sheet": True}, {"is_sheet": False}, {"is_sheet": True}]
+
+    slices = slicer.slice_structure(coords, residues)
+
+    assert {point[3] for points in slices.values() for point in points} == {0.0, 1.0}
+    assert {point[3] for point in slices[1.0]} == {0.0, 1.0}
+
+
 def test_beta_barrel_detection_prepare_error_rows_mark_score_not_applicable() -> None:
     rows = detection_pipeline._prepare_error_rows(["/tmp/missing.cif: parser failed"])
+
+    assert rows[0]["score_type"] == "not_applicable"
+    assert rows[0]["calibration_status"] == "not_applicable"
+
+
+def test_beta_barrel_staves_prepare_error_rows_mark_score_not_applicable() -> None:
+    rows = staves_prepare_error_rows(["/tmp/missing.cif: parser failed"])
 
     assert rows[0]["score_type"] == "not_applicable"
     assert rows[0]["calibration_status"] == "not_applicable"
@@ -763,6 +842,22 @@ def test_topology_diagnostics_parse_failed_rows_are_status_only() -> None:
     assert "betlas_jelly_rollness" in diagnostics.columns
     assert diagnostics.loc[0, "betlas_topology_ambiguity_score"] == ""
     assert diagnostics.loc[0, "betlas_jelly_rollness"] == ""
+
+
+def test_topology_diagnostics_no_informative_slices_rows_are_status_only() -> None:
+    row = _topology_row(
+        "zeroSlice",
+        "beta_sandwich",
+        betlas_score_status="no_informative_slices",
+        betlas_axis_best_slice_count=0.0,
+    )
+
+    diagnostics = compute_topology_diagnostics(pd.DataFrame([row]))
+
+    assert diagnostics.loc[0, "betlas_topology_status"] == "no_informative_slices"
+    assert "betlas_score_status" in diagnostics.loc[0, "betlas_topology_error"]
+    assert diagnostics.loc[0, "betlas_probability_top1"] == ""
+    assert diagnostics.loc[0, "betlas_mixed_topology_score"] == ""
 
 
 def test_topology_diagnostics_explicit_out_controls_default_manifest_path(tmp_path: Path) -> None:

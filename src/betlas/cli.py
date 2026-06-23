@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from tqdm import tqdm
 from .assets import (
     DEFAULT_ASSET_BASE_URL,
     AssetError,
+    asset_file_report,
     describe_asset,
     download_asset,
     list_assets,
@@ -46,15 +48,34 @@ from .slicing import SliceConfig, slice_mmcif, summarize_slices
 from .specs import list_feature_specs
 
 
+def _package_version() -> str:
+    try:
+        return version("betlas")
+    except PackageNotFoundError:  # pragma: no cover - source-tree fallback without metadata
+        return "0.0.0"
+
+
 def _require_file(path_value: str | Path, *, label: str) -> Path:
     path = Path(path_value).expanduser()
     if not str(path_value).strip():
         raise FileNotFoundError(f"{label} path is required")
     if not path.exists():
-        raise FileNotFoundError(f"{label} file does not exist: {path}")
+        hint = ""
+        if label.lower().startswith("feature") and path == DEFAULT_FEATURES_CSV:
+            hint = (
+                "; this is the default output path. Run "
+                "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out runs/features.csv` "
+                "and pass `--features runs/features.csv`, or run the documented quickstart first"
+            )
+        raise FileNotFoundError(f"{label} file does not exist: {path}{hint}")
     if not path.is_file():
         raise FileNotFoundError(f"{label} path is not a file: {path}")
     return path
+
+
+def _is_stdout_path(path_value: str | Path) -> bool:
+    text = str(path_value).strip()
+    return text in {"-", "/dev/stdout", "/proc/self/fd/1"}
 
 
 def _structure_failed_row(args: argparse.Namespace, structure_state: dict[str, Any], error: Exception) -> dict[str, Any]:
@@ -101,6 +122,13 @@ def build_dataset_command(args: argparse.Namespace) -> None:
         initial_max_per_s35=args.initial_max_per_s35,
         max_s35_cap=args.max_s35_cap,
     )
+    if _is_stdout_path(args.out):
+        df.to_csv(sys.stdout, index=False)
+        counts = df["fold_label_final"].value_counts().sort_index()
+        print(f"Wrote {len(df)} labels to stdout", file=sys.stderr)
+        print(counts.to_string(), file=sys.stderr)
+        return
+
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
@@ -340,6 +368,13 @@ def grammar_describe_command(args: argparse.Namespace) -> None:
             print(f"  - {note}")
 
 
+def _grammar_parse_failure_detail(row: dict[str, Any]) -> str:
+    warning = row.get("betlas_warnings", "")
+    error = row.get("betlas_error", "")
+    detail = str(error or warning or "betlas_parse_ok is not 1")
+    return detail.split(" Use --write-failed-row", 1)[0].strip()
+
+
 def grammar_score_command(args: argparse.Namespace) -> None:
     features_path = _require_file(args.features, label="feature CSV")
     raw_features = pd.read_csv(features_path, dtype=str, keep_default_na=False)
@@ -366,9 +401,7 @@ def grammar_score_command(args: argparse.Namespace) -> None:
         for index, row in enumerate(features.to_dict(orient="records"), start=1):
             if int(parse_ok.iloc[index - 1]) != 1:
                 row_id = row.get("record_id", f"row {index}")
-                warning = row.get("betlas_warnings", "")
-                error = row.get("betlas_error", "")
-                detail = str(error or warning or "betlas_parse_ok is not 1")
+                detail = _grammar_parse_failure_detail(row)
                 parse_failures.append(f"{row_id}: {detail}")
         if parse_failures:
             examples = "; ".join(parse_failures[:5])
@@ -425,6 +458,7 @@ def grammar_score_command(args: argparse.Namespace) -> None:
             {
                 "betlas_top_fold": explanation["top_fold"],
                 "betlas_rule_margin": explanation["margin"],
+                "betlas_fold_scores_json": explanation["scores_json"],
             }
         )
         for label, score in explanation["scores"].items():
@@ -533,15 +567,34 @@ def assets_download_command(args: argparse.Namespace) -> None:
 
 
 def assets_verify_command(args: argparse.Namespace) -> None:
-    results = verify_asset(
+    if args.strict:
+        results = verify_asset(
+            args.asset_id,
+            cache_dir=args.cache_dir,
+            filenames=args.file,
+            strict=True,
+        )
+        for filename, ok in results.items():
+            print(f"{filename}\t{'ok' if ok else 'failed'}")
+        return
+
+    report = asset_file_report(
         args.asset_id,
         cache_dir=args.cache_dir,
         filenames=args.file,
-        strict=args.strict,
+        strict=False,
     )
-    for filename, ok in results.items():
-        print(f"{filename}\t{'ok' if ok else 'failed'}")
-    if not all(results.values()):
+    failures = 0
+    for file_info in report["files"]:
+        ok = bool(file_info["ok"])
+        status = "ok" if ok else "failed"
+        if not ok:
+            failures += 1
+        print(
+            f"{file_info['filename']}\t{status}\t{file_info['reason']}\t"
+            f"cache={file_info['path']}"
+        )
+    if failures:
         raise SystemExit(2)
 
 
@@ -555,7 +608,10 @@ def assets_path_command(args: argparse.Namespace) -> None:
         base_url=args.base_url,
     )
     if args.must_exist and not path.exists():
-        raise AssetError(f"asset path does not exist: {path}; use --download to fetch it first")
+        raise AssetError(
+            f"asset path does not exist: {path}; use --download with BETLAS_ASSET_BASE_URL=<local mirror> "
+            "or pass --base-url while packaged manifests are pending_release"
+        )
     print(path)
 
 
@@ -585,7 +641,8 @@ def chains_command(args: argparse.Namespace) -> None:
         return
     print(
         "auth_chain_id\tlabel_chain_ids\tstandard_ca_residue_count\tinsertion_code_ca_count\t"
-        "nonpolymer_atom_rows\tsheet_annotation_available\thelix_conf_annotation_available\tworkflow_hints"
+        "nonpolymer_atom_rows\tprotein_like_hetatm_ca_count\tusable_sheet_range_count\t"
+        "blocked_sheet_range_count\tsheet_annotation_available\thelix_conf_annotation_available\tworkflow_hints"
     )
     for row in rows:
         print(
@@ -596,6 +653,9 @@ def chains_command(args: argparse.Namespace) -> None:
                     str(row["standard_ca_residue_count"]),
                     str(row["insertion_code_ca_count"]),
                     str(row["nonpolymer_atom_rows"]),
+                    str(row["protein_like_hetatm_ca_count"]),
+                    str(row["usable_sheet_range_count"]),
+                    str(row["blocked_sheet_range_count"]),
                     "yes" if row["sheet_annotation_available"] else "no",
                     "yes" if row["helix_conf_annotation_available"] else "no",
                     ",".join(str(value) for value in row["workflow_hints"]),
@@ -666,7 +726,17 @@ def slice_command(args: argparse.Namespace) -> None:
             "chain_id",
             "residue_ranges",
             "source_mmcif_sha256",
+            "source_mmcif_path",
+            "source_mmcif_size",
+            "source_mmcif_exists",
             "axis_name",
+            "axis_score",
+            "axis_origin_x",
+            "axis_origin_y",
+            "axis_origin_z",
+            "axis_direction_x",
+            "axis_direction_y",
+            "axis_direction_z",
             "min_points_per_slice",
             "target_bin_width",
             "min_bins",
@@ -688,7 +758,17 @@ def slice_command(args: argparse.Namespace) -> None:
                 "chain_id": payload["chain_id"],
                 "residue_ranges": payload["residue_ranges"],
                 "source_mmcif_sha256": payload["source_mmcif_sha256"],
+                "source_mmcif_path": payload["source_mmcif_path"],
+                "source_mmcif_size": payload["source_mmcif_size"],
+                "source_mmcif_exists": payload["source_mmcif_exists"],
                 "axis_name": payload["axis_name"],
+                "axis_score": payload["axis_score"],
+                "axis_origin_x": payload["axis_origin"][0],
+                "axis_origin_y": payload["axis_origin"][1],
+                "axis_origin_z": payload["axis_origin"][2],
+                "axis_direction_x": payload["axis_direction"][0],
+                "axis_direction_y": payload["axis_direction"][1],
+                "axis_direction_z": payload["axis_direction"][2],
                 "min_points_per_slice": payload["config"]["min_points_per_slice"],
                 "target_bin_width": payload["config"]["target_bin_width"],
                 "min_bins": payload["config"]["min_bins"],
@@ -718,7 +798,17 @@ def slice_command(args: argparse.Namespace) -> None:
             "chain_id",
             "residue_ranges",
             "source_mmcif_sha256",
+            "source_mmcif_path",
+            "source_mmcif_size",
+            "source_mmcif_exists",
             "axis_name",
+            "axis_score",
+            "axis_origin_x",
+            "axis_origin_y",
+            "axis_origin_z",
+            "axis_direction_x",
+            "axis_direction_y",
+            "axis_direction_z",
             "min_points_per_slice",
             "target_bin_width",
             "min_bins",
@@ -750,7 +840,17 @@ def slice_command(args: argparse.Namespace) -> None:
                     "chain_id": payload["chain_id"],
                     "residue_ranges": payload["residue_ranges"],
                     "source_mmcif_sha256": payload["source_mmcif_sha256"],
+                    "source_mmcif_path": payload["source_mmcif_path"],
+                    "source_mmcif_size": payload["source_mmcif_size"],
+                    "source_mmcif_exists": payload["source_mmcif_exists"],
                     "axis_name": payload["axis_name"],
+                    "axis_score": payload["axis_score"],
+                    "axis_origin_x": payload["axis_origin"][0],
+                    "axis_origin_y": payload["axis_origin"][1],
+                    "axis_origin_z": payload["axis_origin"][2],
+                    "axis_direction_x": payload["axis_direction"][0],
+                    "axis_direction_y": payload["axis_direction"][1],
+                    "axis_direction_z": payload["axis_direction"][2],
                     "min_points_per_slice": payload["config"]["min_points_per_slice"],
                     "target_bin_width": payload["config"]["target_bin_width"],
                     "min_bins": payload["config"]["min_bins"],
@@ -819,6 +919,11 @@ def main(argv: list[str] | None = None) -> None:
             "Use '<command> --help' for command-specific inputs, outputs, and examples."
         ),
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_package_version()}",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     build = sub.add_parser(
@@ -830,10 +935,16 @@ def main(argv: list[str] | None = None) -> None:
             "Examples:\n"
             "  betlas build-dataset --all-eligible --out runs/betlas_cath_labels.csv\n"
             "  betlas build-dataset --sample-balanced --target-per-class 220 --seed 13\n\n"
+            "CATH inputs: if required source files are absent from --cath-dir, Betlas downloads the "
+            "current CATH daily files. For pinned/reproducible runs, populate --cath-dir from a local mirror first.\n"
             "Output: CSV with record identifiers, CATH metadata, fold labels, and provenance columns."
         ),
     )
-    build.add_argument("--cath-dir", default=str(DEFAULT_CATH_DIR), help="Directory containing CATH source files.")
+    build.add_argument(
+        "--cath-dir",
+        default=str(DEFAULT_CATH_DIR),
+        help="Directory containing CATH source files; missing files are fetched from current CATH daily.",
+    )
     build.add_argument("--target-per-class", type=int, default=220, help="Balanced-sampler target rows per fold class.")
     build.add_argument("--seed", type=int, default=13, help="Random seed for deterministic sampling.")
     build.add_argument("--include-putative", action="store_true", help="Include putative CATH-derived rows when eligible.")
@@ -870,6 +981,7 @@ def main(argv: list[str] | None = None) -> None:
             "  betlas extract-features --structure runs/examples/mini.cif --chain A --out runs/mini_features.csv\n"
             "  betlas grammar score --features runs/mini_features.csv\n\n"
             "Single-structure input currently accepts mmCIF files: .cif, .mmcif, .cif.gz, .mmcif.gz.\n"
+            "Selected grammar/slice residues must use numeric author residue IDs; insertion-code ranges are rejected.\n"
             "Dataset construction and batch feature extraction may download CATH/RCSB data and can take time.\n"
             "Output: feature CSV with Betlas geometry columns, source mmCIF provenance, and parse-status columns."
         ),
@@ -1034,7 +1146,8 @@ def main(argv: list[str] | None = None) -> None:
             "  betlas slice 1abc.cif --chain A --axis best --out runs/slices.csv --summary-out runs/slice_summary.json\n"
             "  betlas slice 1abc.cif --chain A --residue-ranges 10-180:A --points-out runs/slice_points.csv\n\n"
             "Output summary keys match the unprefixed values behind betlas_axis_best_* feature columns. "
-            "The default axis is the same best-axis scoring rule used during Betlas feature extraction."
+            "The default axis is the same best-axis scoring rule used during Betlas feature extraction. "
+            "Selected residues must use numeric author residue IDs; insertion-code ranges are rejected."
         ),
     )
     slice_parser.add_argument("path", help="Input mmCIF or mmCIF.gz file.")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import math
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -114,6 +115,27 @@ def display_path(path: Path) -> str:
         return str(path.resolve().relative_to(REPO_ROOT))
     except ValueError:
         return str(path)
+
+
+def dependency_status() -> dict[str, str]:
+    return {"catboost": "available" if importlib.util.find_spec("catboost") else "missing"}
+
+
+def write_dependency_preflight(out_dir: Path) -> dict[str, Any]:
+    status = dependency_status()
+    preflight = {
+        "status": "ok" if status["catboost"] == "available" else "failed",
+        "required_model_dependencies": ["catboost"],
+        "model_dependency_status": status,
+    }
+    write_json(out_dir / "dependency_preflight.json", preflight)
+    if status["catboost"] != "available":
+        raise RuntimeError(
+            "fixed-cohort beta-barrel detection readout requires CatBoost; "
+            "install the reproducibility environment or run `python -m pip install catboost` "
+            "before running this companion script"
+        )
+    return preflight
 
 
 def layer_feature_name(raw: str) -> str:
@@ -393,7 +415,21 @@ def build_or_load_betlas_151(
         frame.to_csv(out_path, index=False)
         return frame
     if out_path.exists() and not force:
-        return normalize_feature_columns(pd.read_csv(out_path))
+        frame = normalize_feature_columns(pd.read_csv(out_path))
+        frame = _align_cached_frame(
+            frame,
+            cohort,
+            path=out_path,
+            frame_name="Betlas 151 generated feature cache",
+        )
+        missing_features = [column for column in feature_columns if column not in frame.columns]
+        if missing_features:
+            raise ValueError(
+                "Betlas 151 generated feature cache is missing required feature columns: "
+                f"{missing_features[:8]}"
+            )
+        frame.to_csv(out_path, index=False)
+        return frame
 
     rows = cohort.to_dict(orient="records")
     feature_rows: list[dict[str, Any]] = []
@@ -469,9 +505,26 @@ def build_or_load_layer_radial16(
     if out_path.exists() and manifest_path.exists() and not force:
         values = pd.read_csv(out_path)
         manifest = pd.read_csv(manifest_path)
+        values = _align_cached_frame(
+            values,
+            cohort,
+            path=out_path,
+            frame_name="LayerRadial16 generated feature cache",
+        )
+        if "feature" not in manifest.columns:
+            raise ValueError(f"LayerRadial16 generated manifest lacks `feature`: {manifest_path}")
+        missing_layer_columns = [
+            column for column in manifest["feature"].astype(str).tolist() if column not in values.columns
+        ]
+        if missing_layer_columns:
+            raise ValueError(
+                "LayerRadial16 generated feature cache is missing manifest columns: "
+                f"{missing_layer_columns[:8]}"
+            )
+        values.to_csv(out_path, index=False)
         return values, manifest
 
-    chain_results = pd.read_csv(paths.betlas_beta_chain_results)
+    chain_results = pd.read_csv(paths.layer_radial_chain_results)
     chain_results["filename"] = chain_results["filename"].astype(str)
     chain_results["chain"] = chain_results["chain"].astype(str)
     keyed = {
@@ -755,6 +808,7 @@ def evaluate_catboost_readout(
                 "split_strategy": split_strategy,
                 "effective_n_splits": int(effective_splits),
                 "probability_alignment_warning": warning,
+                "probability_calibration_status": "model_reported_uncalibrated",
             }
         )
         fold_metrics.append(row)
@@ -776,6 +830,7 @@ def evaluate_catboost_readout(
             "split_strategy": split_strategy,
             "effective_n_splits": int(effective_splits),
             "probability_alignment_warnings": ";".join(probability_warnings),
+            "probability_calibration_status": "model_reported_uncalibrated",
             "runtime_seconds": round(time.perf_counter() - start, 3),
         }
     )
@@ -786,6 +841,8 @@ def evaluate_catboost_readout(
     per_record["pred_barrel"] = predictions.astype(bool)
     per_record["pred_label"] = np.where(predictions == 1, "positive", "negative")
     per_record["prob_barrel"] = scores
+    per_record["probability_source"] = "catboost_predict_proba"
+    per_record["probability_calibration_status"] = "model_reported_uncalibrated"
     per_record["correct"] = predictions == y
     return Evaluation(summary, pd.DataFrame(fold_metrics), per_record, estimators)
 
@@ -829,6 +886,7 @@ def write_summary_markdown(path: Path, official: pd.DataFrame, comparison: pd.Da
         "",
         "- Task: beta-barrel detection benchmark.",
         "- Classifier: grouped out-of-fold CatBoost binary classifier.",
+        "- Probability columns are estimator-reported, uncalibrated CatBoost outputs.",
         "- Active Betlas feature progression: Betlas 151; Betlas 151 + LayerRadial16; Betlas 151 + LayerRadial16 + ESM-C when a matching cache is supplied.",
         "",
         "## Active Readouts",
@@ -886,6 +944,7 @@ def run_official_detection_readout(
 ) -> dict[str, Any]:
     run_start = time.perf_counter()
     paths.out_dir.mkdir(parents=True, exist_ok=True)
+    dependency_preflight = write_dependency_preflight(paths.out_dir)
     if paths.feature_columns is None:
         raise ValueError(
             "Betlas 151 detection readout requires --asset-id or an explicit "
@@ -1025,6 +1084,9 @@ def run_official_detection_readout(
         "asset_id": paths.asset_id,
         "asset_cache_dir": display_path(paths.asset_cache_dir) if paths.asset_cache_dir is not None else "",
         "asset_manifest_verification": paths.asset_manifest_verification or {},
+        "dependency_preflight": "dependency_preflight.json",
+        "model_dependency_status": dependency_preflight["model_dependency_status"],
+        "probability_calibration_status": "model_reported_uncalibrated",
         "cohort_csv": display_path(paths.cohort_csv) if paths.cohort_csv else "",
         "layer_radial_chain_results": (
             display_path(paths.layer_radial_chain_results)

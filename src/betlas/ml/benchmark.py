@@ -235,14 +235,58 @@ def feature_columns_for_set(df: pd.DataFrame, feature_set: str) -> list[str]:
     raise ValueError(f"unknown benchmark feature set {feature_set!r}; expected one of: {available}")
 
 
-def _first_nonempty_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
-    out = pd.Series("", index=df.index, dtype=object)
+def _connected_group_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    """Return grouping components linked by any non-empty public group column."""
+
+    n = len(df)
+    parent = list(range(n))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root == right_root:
+            return
+        if right_root < left_root:
+            left_root, right_root = right_root, left_root
+        parent[right_root] = left_root
+
+    seen_tokens: dict[str, int] = {}
+    row_has_token = [False] * n
     for column in columns:
         if column not in df:
             continue
-        values = df[column].astype(str).str.strip()
-        out = out.mask(out.astype(str).str.strip() == "", values)
-    return out
+        values = df[column].astype(str).str.strip().reset_index(drop=True)
+        for index, value in enumerate(values):
+            if not value:
+                continue
+            row_has_token[index] = True
+            token = f"{column}={value}"
+            previous = seen_tokens.get(token)
+            if previous is None:
+                seen_tokens[token] = index
+            else:
+                union(previous, index)
+
+    labels: list[str] = []
+    root_to_label: dict[int, str] = {}
+    for index in range(n):
+        if not row_has_token[index]:
+            labels.append(f"missing_group_row={index}")
+            continue
+        root = find(index)
+        label = root_to_label.get(root)
+        if label is None:
+            tokens = sorted(token for token, token_index in seen_tokens.items() if find(token_index) == root)
+            label = "|".join(tokens[:4]) + (f"|plus_{len(tokens) - 4}_more" if len(tokens) > 4 else "")
+            root_to_label[root] = label
+        labels.append(label)
+    return pd.Series(labels, index=df.index, dtype=object)
 
 
 def _require_columns(df: pd.DataFrame, columns: tuple[str, ...], *, context: str) -> None:
@@ -524,11 +568,11 @@ def _align_predict_proba(
     if proba.ndim != 2:
         warnings.append(f"{model_name} fold {fold}: predict_proba returned non-matrix output")
         return np.zeros((len(proba), len(labels)), dtype=float), warnings
-    if proba.shape[1] == len(labels):
-        return proba, warnings
 
     classes = getattr(estimator, "classes_", None)
     if classes is None or len(classes) == 0:
+        if proba.shape[1] == len(labels):
+            return proba, warnings
         warnings.append(
             f"{model_name} fold {fold}: predict_proba had {proba.shape[1]} columns but estimator classes_ was unavailable"
         )
@@ -610,7 +654,7 @@ def run_grouped_benchmark(
     y = encoder.transform(df["fold_label_final"])
     X = df[feature_cols].apply(pd.to_numeric, errors="coerce")
     include = set(_included_models(benchmark_config))
-    groups = _first_nonempty_series(df, BENCHMARK_GROUP_COLUMNS).to_numpy()
+    groups = _connected_group_series(df, BENCHMARK_GROUP_COLUMNS).to_numpy()
     if not any(str(group).strip() for group in groups):
         raise ValueError(
             "benchmark could not derive grouped cross-validation groups; provide at least one "
@@ -626,12 +670,16 @@ def run_grouped_benchmark(
         "parse_filter": "betlas_parse_ok == 1",
         "class_counts": {str(k): int(v) for k, v in df["fold_label_final"].value_counts().sort_index().items()},
         "group_columns_priority": list(BENCHMARK_GROUP_COLUMNS),
+        "grouping_strategy": "connected_components_across_group_columns",
         "group_source_counts": _group_source_counts(df),
         "group_count": int(pd.Series(groups).astype(str).nunique()),
         "feature_set": feature_set,
         "feature_count": int(len(feature_cols)),
         "rule_score_columns_present": not missing_rule_scores,
         "missing_rule_score_columns": missing_rule_scores,
+        "required_global_classes": list(FOLD_LABELS),
+        "missing_global_classes": sorted(set(FOLD_LABELS) - set(df["fold_label_final"].astype(str))),
+        "require_all_fold_labels": True,
         "features_csv": str(features_csv),
         "effective_split_strategy": "not_run",
         "effective_n_splits": 0,
@@ -644,11 +692,36 @@ def run_grouped_benchmark(
             out_dir / "benchmark_preflight.json",
             {
                 **base_preflight,
+                "status": "failed",
+                "failure_stage": "feature_schema",
                 "effective_split_strategy": "not_run_missing_rule_scores",
+                "error": (
+                    "grammar_rules benchmark requires complete Betlas rule-score columns; "
+                    f"missing: {missing_rule_scores}"
+                ),
                 "model_dependency_status": {"grammar_rules": "requested"},
             },
         )
         _validate_rule_score_values(df)
+    missing_global_classes = sorted(set(FOLD_LABELS) - set(df["fold_label_final"].astype(str)))
+    if missing_global_classes:
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **base_preflight,
+                "status": "failed",
+                "failure_stage": "class_coverage",
+                "effective_split_strategy": "not_run_missing_global_classes",
+                "error": (
+                    "benchmark requires all Betlas fold labels before grouped CV; "
+                    f"missing global classes: {missing_global_classes}"
+                ),
+            },
+        )
+        raise ValueError(
+            "benchmark requires all Betlas fold labels before grouped CV; "
+            f"missing global classes: {missing_global_classes}"
+        )
     try:
         splits, split_strategy, n_splits = make_grouped_splits(
             X,
@@ -774,6 +847,12 @@ def run_grouped_benchmark(
                         "pred_probability": top1_probability,
                         "top2_probability": top2_probability,
                         "top2_margin": top1_probability - top2_probability,
+                        "probability_source": "predict_proba"
+                        if hasattr(model, "predict_proba")
+                        else "predicted_label_one_hot",
+                        "probability_calibration_status": "model_reported_uncalibrated"
+                        if hasattr(model, "predict_proba")
+                        else "not_applicable",
                         "probability_alignment_warnings": "|".join(alignment_warnings)
                         if hasattr(model, "predict_proba")
                         else "",

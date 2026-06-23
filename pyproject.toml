@@ -41,12 +41,6 @@ dependencies = [
 ml = [
   "xgboost>=2.0",
 ]
-all = [
-  "xgboost>=2.0",
-]
-fixed-cohort = [
-  "catboost>=1.2",
-]
 dev = [
   "pytest>=7.0",
   "ruff>=0.5",

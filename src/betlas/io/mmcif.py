@@ -73,16 +73,28 @@ def _list_value(mmcif: dict[str, object], key: str) -> list[str]:
     return [str(value)]
 
 
+_INTEGER_RE = re.compile(r"-?\d+")
+
+
 def _safe_int(value: str | None) -> int | None:
     if value is None:
         return None
     value = str(value).strip()
     if value in {"", ".", "?"}:
         return None
-    match = re.search(r"-?\d+", value)
-    if not match:
+    if not _INTEGER_RE.fullmatch(value):
         return None
-    return int(match.group(0))
+    return int(value)
+
+
+def _require_numeric_auth_seq(value: str | None, *, context: str) -> int:
+    parsed = _safe_int(value)
+    if parsed is None:
+        raise ValueError(
+            "Betlas grammar/slice extraction currently supports numeric author residue IDs only; "
+            f"{context} has unsupported value {value!r}"
+        )
+    return parsed
 
 
 def _safe_float(value: str | None, default: float = math.nan) -> float:
@@ -178,6 +190,7 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
     labels_by_chain: dict[str, set[str]] = defaultdict(set)
     insertion_counts: dict[str, int] = defaultdict(int)
     nonpolymer_counts: dict[str, int] = defaultdict(int)
+    protein_like_hetatm_counts: dict[str, int] = defaultdict(int)
     for i in range(n):
         chain = auth_asym[i]
         if not chain:
@@ -185,11 +198,15 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
         labels_by_chain[chain].add(label_asym[i])
         atom_name = (auth_atom[i] or label_atom[i]).strip().upper()
         residue_name = comp_id[i].strip().upper() if i < len(comp_id) else ""
-        if group[i] != "ATOM" or residue_name not in STANDARD_AMINO_ACIDS:
+        group_name = group[i].strip().upper()
+        protein_like_hetatm = group_name == "HETATM" and residue_name in STANDARD_AMINO_ACIDS
+        if group_name not in {"ATOM", "HETATM"} or residue_name not in STANDARD_AMINO_ACIDS:
             nonpolymer_counts[chain] += 1
             continue
         if atom_name != "CA":
             continue
+        if protein_like_hetatm:
+            protein_like_hetatm_counts[chain] += 1
         seq_id = _safe_int(auth_seq[i])
         if seq_id is None:
             continue
@@ -204,6 +221,40 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
     helix_chains = set(_list_value(mmcif, "_struct_conf.beg_auth_asym_id")) | set(
         _list_value(mmcif, "_struct_conf.end_auth_asym_id")
     )
+    sheet_ids = _list_value(mmcif, "_struct_sheet_range.sheet_id")
+    range_ids = _list_value(mmcif, "_struct_sheet_range.id")
+    beg_chains = _list_value(mmcif, "_struct_sheet_range.beg_auth_asym_id")
+    end_chains = _list_value(mmcif, "_struct_sheet_range.end_auth_asym_id")
+    beg_seq = _list_value(mmcif, "_struct_sheet_range.beg_auth_seq_id")
+    end_seq = _list_value(mmcif, "_struct_sheet_range.end_auth_seq_id")
+    beg_ins = _list_value(mmcif, "_struct_sheet_range.pdbx_beg_PDB_ins_code")
+    end_ins = _list_value(mmcif, "_struct_sheet_range.pdbx_end_PDB_ins_code")
+    if not beg_ins or len(beg_ins) != len(beg_seq):
+        beg_ins = ["?"] * len(beg_seq)
+    if not end_ins or len(end_ins) != len(end_seq):
+        end_ins = ["?"] * len(end_seq)
+    usable_sheet_ranges: dict[str, int] = defaultdict(int)
+    blocked_sheet_ranges: dict[str, int] = defaultdict(int)
+    for _sheet_id, _range_id, beg_chain, end_chain, beg, end, beg_i, end_i in zip(
+        sheet_ids, range_ids, beg_chains, end_chains, beg_seq, end_seq, beg_ins, end_ins, strict=False
+    ):
+        if not beg_chain or beg_chain != end_chain:
+            continue
+        start = _safe_int(beg)
+        stop = _safe_int(end)
+        has_insertions = bool(_normalize_ins_code(beg_i) or _normalize_ins_code(end_i))
+        if start is None or stop is None or has_insertions:
+            blocked_sheet_ranges[beg_chain] += 1
+            continue
+        if start > stop:
+            start, stop = stop, start
+        residue_count = sum(
+            1 for seq_id, ins_code in residues_by_chain.get(beg_chain, set()) if not ins_code and start <= seq_id <= stop
+        )
+        if residue_count >= 2:
+            usable_sheet_ranges[beg_chain] += 1
+        else:
+            blocked_sheet_ranges[beg_chain] += 1
     all_chains = sorted(set(auth_asym) | set(residues_by_chain) | sheet_chains | helix_chains)
     rows: list[dict[str, object]] = []
     for chain in all_chains:
@@ -215,12 +266,17 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
         hints: list[str] = []
         if residue_count == 0:
             hints.append("no_standard_ca_residues")
+        usable_count = int(usable_sheet_ranges.get(chain, 0))
+        blocked_count = int(blocked_sheet_ranges.get(chain, 0))
         if has_sheet and insertion_counts.get(chain, 0):
             hints.append("feature_extraction_blocked_insertion_codes")
             hints.append("slice_blocked_insertion_codes")
-        elif has_sheet:
+        elif has_sheet and usable_count > 0:
             hints.append("feature_extraction_supported")
             hints.append("slice_supported")
+        elif has_sheet:
+            hints.append("sheet_annotations_unusable")
+            hints.append("readout_inputs_supported")
         else:
             hints.append("no_sheet_annotations")
             hints.append("readout_inputs_supported")
@@ -235,6 +291,9 @@ def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
                 "helix_conf_annotation_available": bool(has_conf),
                 "insertion_code_ca_count": int(insertion_counts.get(chain, 0)),
                 "nonpolymer_atom_rows": int(nonpolymer_counts.get(chain, 0)),
+                "protein_like_hetatm_ca_count": int(protein_like_hetatm_counts.get(chain, 0)),
+                "usable_sheet_range_count": usable_count,
+                "blocked_sheet_range_count": blocked_count,
                 "workflow_hints": hints,
             }
         )
@@ -261,6 +320,7 @@ def _selected_ca_records(
     comp_id = _list_value(mmcif, "_atom_site.label_comp_id")
     ins_codes = _list_value(mmcif, "_atom_site.pdbx_PDB_ins_code")
     occupancies = _list_value(mmcif, "_atom_site.occupancy")
+    model_nums = _list_value(mmcif, "_atom_site.pdbx_PDB_model_num")
     xs = _list_value(mmcif, "_atom_site.Cartn_x")
     ys = _list_value(mmcif, "_atom_site.Cartn_y")
     zs = _list_value(mmcif, "_atom_site.Cartn_z")
@@ -272,29 +332,40 @@ def _selected_ca_records(
         occupancies = ["1.0"] * n
     if not auth_atom or len(auth_atom) != n:
         auth_atom = label_atom
+    if not model_nums or len(model_nums) != n:
+        model_nums = [""] * n
+    allowed_model_nums = {str(int(domain.model_id) + 1)}
+    if int(domain.model_id) == 0:
+        allowed_model_nums.add("0")
 
     ranges = parse_residue_ranges(domain.residue_ranges, fallback_chain_id=domain.chain_id)
-    chosen: dict[tuple[str, int, str], tuple[float, ResidueRecord]] = {}
+    chosen: dict[tuple[str, int, str], tuple[float, int, ResidueRecord]] = {}
     for i in range(n):
-        if group and group[i] != "ATOM":
+        model_num = str(model_nums[i]).strip()
+        if model_num and model_num not in allowed_model_nums:
+            continue
+        residue_name = comp_id[i].strip().upper()
+        group_name = group[i].strip().upper() if group else "ATOM"
+        if group_name not in {"ATOM", "HETATM"} or residue_name not in STANDARD_AMINO_ACIDS:
             continue
         atom_name = (auth_atom[i] or label_atom[i]).strip().upper()
         if atom_name != "CA":
             continue
-        residue_name = comp_id[i].strip().upper()
-        if residue_name not in STANDARD_AMINO_ACIDS:
-            continue
-        seq_id = _safe_int(auth_seq[i])
-        if seq_id is None:
-            continue
         chain_id = auth_asym[i]
         if chain_id != domain.chain_id:
             continue
+        seq_id = _safe_int(auth_seq[i])
+        if seq_id is None:
+            if ranges:
+                continue
+            seq_id = _require_numeric_auth_seq(
+                auth_seq[i],
+                context=f"atom_site.auth_seq_id for chain {chain_id}",
+            )
         if not _in_ranges(chain_id, seq_id, ranges):
             continue
         alt_id = label_alt[i].strip() if i < len(label_alt) else ""
-        if alt_id not in {"", ".", "?", "A"}:
-            continue
+        alt_rank = 2 if alt_id in {"", ".", "?"} else 1 if alt_id == "A" else 0
         label_seq_id = _safe_int(label_seq[i]) if i < len(label_seq) else None
         ins_code = _normalize_ins_code(ins_codes[i])
         x, y, z = _safe_float(xs[i]), _safe_float(ys[i]), _safe_float(zs[i])
@@ -312,11 +383,11 @@ def _selected_ca_records(
             coord_ca=(float(x), float(y), float(z)),
         )
         previous = chosen.get(key)
-        if previous is None or occupancy > previous[0]:
-            chosen[key] = (occupancy, record)
+        if previous is None or (occupancy, alt_rank) > (previous[0], previous[1]):
+            chosen[key] = (occupancy, alt_rank, record)
 
     residues = sorted(
-        (record for _occupancy, record in chosen.values()),
+        (record for _occupancy, _alt_rank, record in chosen.values()),
         key=lambda residue: (residue.auth_seq_id, residue.insertion_code),
     )
     index_by_key = {
@@ -378,21 +449,26 @@ def _parse_beta_segments(
     ):
         if beg_chain != domain.chain_id or end_chain != domain.chain_id:
             continue
+        start = _safe_int(beg)
+        stop = _safe_int(end)
+        if start is None or stop is None:
+            raise ValueError(
+                "Betlas grammar/slice extraction currently supports numeric author residue "
+                f"sheet ranges only; mmCIF sheet range {sheet_id}:{range_id} has nonnumeric boundaries"
+            )
+        range_start = min(start, stop)
+        range_stop = max(start, stop)
+        if ranges and not any(
+            chain == domain.chain_id and not (range_stop < r_start or range_start > r_end)
+            for chain, r_start, r_end in ranges
+        ):
+            continue
         if _normalize_ins_code(beg_i) or _normalize_ins_code(end_i):
             raise ValueError(
                 "Betlas grammar/slice extraction currently supports numeric author residue "
                 "sheet ranges only; mmCIF sheet range "
                 f"{sheet_id}:{range_id} uses insertion-code boundaries"
             )
-        start = _safe_int(beg)
-        stop = _safe_int(end)
-        if start is None or stop is None:
-            continue
-        if ranges and not any(
-            chain == domain.chain_id and not (stop < r_start or start > r_end)
-            for chain, r_start, r_end in ranges
-        ):
-            continue
         indices = _segment_indices_for_range(residues, domain.chain_id, start, stop)
         if len(indices) < 2:
             continue
@@ -440,20 +516,25 @@ def _parse_helices(
             continue
         if beg_chain != domain.chain_id or end_chain != domain.chain_id:
             continue
+        start = _safe_int(beg)
+        stop = _safe_int(end)
+        if start is None or stop is None:
+            raise ValueError(
+                "Betlas grammar/slice extraction currently supports numeric author residue "
+                f"helix ranges only; mmCIF struct_conf {conf_id} has nonnumeric boundaries"
+            )
+        range_start = min(start, stop)
+        range_stop = max(start, stop)
+        if ranges and not any(
+            chain == domain.chain_id and not (range_stop < r_start or range_start > r_end)
+            for chain, r_start, r_end in ranges
+        ):
+            continue
         if _normalize_ins_code(beg_i) or _normalize_ins_code(end_i):
             raise ValueError(
                 "Betlas grammar/slice extraction currently supports numeric author residue "
                 f"helix ranges only; mmCIF struct_conf {conf_id} uses insertion-code boundaries"
             )
-        start = _safe_int(beg)
-        stop = _safe_int(end)
-        if start is None or stop is None:
-            continue
-        if ranges and not any(
-            chain == domain.chain_id and not (stop < r_start or start > r_end)
-            for chain, r_start, r_end in ranges
-        ):
-            continue
         indices = _segment_indices_for_range(residues, domain.chain_id, start, stop)
         if len(indices) < 3:
             continue

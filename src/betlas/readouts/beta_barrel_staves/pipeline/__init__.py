@@ -215,8 +215,8 @@ def _prepare_error_rows(errors: list[str]) -> list[dict[str, object]]:
                 "chain": "",
                 "result": "ERROR",
                 "result_stage": "prepare",
-                "score_type": "heuristic",
-                "calibration_status": "uncalibrated",
+                "score_type": "not_applicable",
+                "calibration_status": "not_applicable",
                 "config_profile": "native",
                 "reason": detail.strip() or error,
             }

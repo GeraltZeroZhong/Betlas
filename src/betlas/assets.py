@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-DEFAULT_ASSET_BASE_URL = "https://github.com/GeraltZeroZhong/Betlas/releases/download/betlas-assets-v1.0.0/"
+DEFAULT_ASSET_BASE_URL = "https://github.com/GeraltZeroZhong/Betlas/releases/download/betlas-assets-future-release/"
 ASSET_BASE_URL_ENV = "BETLAS_ASSET_BASE_URL"
 ASSET_DIR_ENV = "BETLAS_ASSET_DIR"
 ESMC_WEIGHTS_ENV = "BETLAS_ESMC_WEIGHTS"
@@ -388,7 +388,14 @@ def verify_asset(
         ok, reason = _verify_file(_asset_file_path(root, file_info), file_info)
         results[filename] = ok
         if not ok:
-            errors.append(f"{filename}: {reason}")
+            hint = f"cache={root}"
+            if str(manifest.get("release_status", "")).strip().lower() == _PENDING_RELEASE_STATUS:
+                hint += (
+                    f"; asset is pending_release, populate the cache with `betlas assets download "
+                    f"{manifest.get('asset_id', '<asset>')} --base-url <local mirror>` or set "
+                    f"{ASSET_BASE_URL_ENV} for that download first"
+                )
+            errors.append(f"{filename}: {reason} ({hint})")
     if strict and errors:
         raise AssetError("; ".join(errors))
     return results

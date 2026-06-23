@@ -50,6 +50,14 @@ def test_src_package_does_not_import_reproducibility_or_plotting_companions() ->
         assert import_name not in source_text
 
 
+def test_pypi_optional_extras_do_not_advertise_repo_only_fixed_cohort() -> None:
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert "fixed-cohort =" not in pyproject
+    assert "all =" not in pyproject
+    assert "catboost" not in pyproject.lower()
+
+
 def test_import_betlas_does_not_set_thread_environment() -> None:
     env = os.environ.copy()
     for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):

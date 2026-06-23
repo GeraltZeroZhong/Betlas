@@ -65,7 +65,7 @@ def main(
             "Input feature CSV: canonical Betlas feature columns plus record identifiers.\n"
             f"{help_text['output']}\n"
             "Stdout is status text, not CSV; pass --out for the CSV path.\n"
-            "Predictions: optional OOF prediction CSV; when absent, rule-derived softmax weights are used "
+            "Predictions: optional out-of-fold prediction CSV; when absent, rule-derived softmax weights are used "
             "and marked uncalibrated."
         ),
     )
@@ -74,7 +74,7 @@ def main(
     parser.add_argument(
         "--predictions",
         default=None,
-        help="Optional OOF prediction CSV. If absent, uncalibrated rule-softmax weights are used.",
+        help="Optional out-of-fold prediction CSV. If absent, uncalibrated rule-softmax weights are used.",
     )
     parser.add_argument("--no-predictions", action="store_true", help="Disable prediction CSV loading.")
     parser.add_argument(
@@ -99,7 +99,7 @@ def main(
         help="Append readout columns to the original feature table instead of writing a compact readout table.",
     )
     args = parser.parse_args(argv)
-    model = args.model if args.model is not None and str(args.model).strip() else None
+    model = args.model if args.model is not None else None
     predictions = None if args.no_predictions else args.predictions
     mode = fixed_mode or args.mode
     result = run_topology_diagnostics(

@@ -907,7 +907,12 @@ def extract_signature(geometry: StructureGeometry) -> GeometrySignature:
 
     informative_slice_count = _nan_to_zero(float(features.get("betlas_axis_best_slice_count", 0.0)))
     score_eligible = bool(parse_ok and informative_slice_count > 0.0)
-    features["betlas_score_status"] = "ok" if score_eligible else "no_informative_slices"
+    if score_eligible:
+        features["betlas_score_status"] = "ok"
+    elif parse_ok:
+        features["betlas_score_status"] = "no_informative_slices"
+    else:
+        features["betlas_score_status"] = "parse_failed"
 
     fold_scores: dict[str, float] = {}
     if score_eligible:

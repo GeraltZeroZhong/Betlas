@@ -145,11 +145,15 @@ def test_topology_readout_specs_describe_string_and_unit_interval_columns() -> N
     competitor = describe_readout_column("betlas_boundary_neighbor_top_competitor", "topology-diagnostics")
     ambiguity = describe_readout_column("betlas_topology_ambiguity_score", "topology-diagnostics")
     jelly = describe_readout_column("betlas_jelly_rollness", "topology-diagnostics")
+    rule_margin = describe_readout_column("betlas_rule_probability_margin", "topology-diagnostics")
 
     assert competitor.dtype == "string"
     assert competitor.value_range.startswith("one Betlas fold label")
     assert ambiguity.value_range == "[0, 1]"
+    assert "rule-softmax" in ambiguity.definition
     assert jelly.value_range == "[0, 1]"
+    assert "calibrated probability" in rule_margin.definition
+    assert "deterministic geometry extraction pipeline" not in rule_margin.definition
 
 
 def test_compute_grammar_features_filters_by_registry_prefixes() -> None:
@@ -234,6 +238,12 @@ def test_continuous_topology_grammar_matches_overlap_implementation_summary() ->
     assert "min(score_a, score_b) * (1 - abs(score_a - score_b))" in spec.math_summary
     assert "betlas_jelly_rollness_basis_json" in spec.columns
     assert "betlas_barrel_jelly_overlap" in spec.columns
+    assert "betlas_barrel_jelly_overlap" in spec.to_dict()["resolved_columns"]
+
+
+def test_compute_grammar_features_rejects_readout_only_grammars() -> None:
+    with pytest.raises(ValueError, match="readout-only grammars"):
+        compute_grammar_features(StructureGeometry.__new__(StructureGeometry), grammars="continuous_topology")
 
 
 def test_feature_and_rule_specs_cover_core_columns() -> None:
@@ -269,7 +279,10 @@ def test_column_specs_cover_protocol_and_readout_columns() -> None:
         "beta-barrel-detection",
     ).definition
     assert describe_column("record_id").required is True
-    assert describe_feature("betlas_jelly_sandwich_overlap").formula.startswith("clip01")
+    assert describe_readout_column(
+        "betlas_jelly_sandwich_overlap",
+        "fold-continuous-scores",
+    ).definition.startswith("Continuous topology overlap")
 
 
 def test_feature_specs_assign_all_betlas_columns_to_public_families() -> None:
@@ -279,6 +292,8 @@ def test_feature_specs_assign_all_betlas_columns_to_public_families() -> None:
     assert unassigned == []
     assert describe_feature("betlas_axis_slice_name").dtype == "string"
     assert describe_feature("betlas_axis_point_pc1_slice_count").family == "axis_closure"
-    assert describe_feature("betlas_rule_probability_margin").family == "topology_ambiguity"
-    assert "zero-filled" in describe_feature("betlas_jelly_rollness").formula
-    assert "zero-filled" in describe_feature("betlas_mixed_topology_score").missing_value
+    assert "betlas_jelly_rollness" not in {spec.name for spec in specs}
+    assert "rule_softmax" in describe_readout_column(
+        "betlas_probability_top1",
+        "topology-diagnostics",
+    ).definition

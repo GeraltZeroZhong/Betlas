@@ -229,6 +229,24 @@ def test_extract_signature_zero_informative_slices_is_not_rule_scored() -> None:
     assert not any(column.startswith("betlas_rule_score_") for column in features)
 
 
+def test_extract_signature_parse_failed_status_when_beta_segments_missing() -> None:
+    geometry = _ring_geometry()
+    geometry = StructureGeometry(
+        domain=geometry.domain,
+        residues=geometry.residues[:3],
+        beta_segments=(),
+        helices=(),
+        sheet_patches=(),
+    )
+
+    features = extract_signature(geometry).features
+
+    assert features["betlas_parse_ok"] == 0
+    assert features["betlas_score_status"] == "parse_failed"
+    assert "betlas_top_fold" not in features
+    assert not any(column.startswith("betlas_rule_score_") for column in features)
+
+
 def test_slice_cli_help_is_public(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["slice", "--help"])
@@ -308,6 +326,19 @@ def test_examples_cli_copies_packaged_mini_structure(tmp_path: Path, capsys: pyt
     assert "data_betlas_mini" in copied.read_text(encoding="utf-8")
 
 
+def test_build_dataset_stdout_skips_manifest(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    def fake_build_cath_dataset(**_kwargs):
+        return pd.DataFrame([{"record_id": "r1", "fold_label_final": FOLD_LABELS[0]}])
+
+    monkeypatch.setattr(cli, "build_cath_dataset", fake_build_cath_dataset)
+
+    cli.main(["build-dataset", "--out", "/dev/stdout"])
+
+    captured = capsys.readouterr()
+    assert "record_id,fold_label_final" in captured.out
+    assert "Wrote 1 labels to stdout" in captured.err
+
+
 def test_chains_cli_inspects_author_and_label_chains(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -320,6 +351,8 @@ def test_chains_cli_inspects_author_and_label_chains(
     assert "auth_chain_id" in out
     assert "insertion_code_ca_count" in out
     assert "nonpolymer_atom_rows" in out
+    assert "protein_like_hetatm_ca_count" in out
+    assert "usable_sheet_range_count" in out
     assert "feature_extraction_supported" in out
 
     cli.main(["structure", "inspect", str(structure), "--format", "json"])
@@ -396,7 +429,7 @@ def test_grammar_score_rejects_parse_failed_rows_by_default(
                 "record_id": "r1",
                 "chain_id": "A",
                 "betlas_parse_ok": 0,
-                "betlas_error": "no beta-sheet segments",
+                "betlas_error": "no beta-sheet segments. Use --write-failed-row if you need a status-only CSV row.",
                 "betlas_axis_best_slice_coverage_median": 0.5,
             }
         ]
@@ -407,6 +440,8 @@ def test_grammar_score_rejects_parse_failed_rows_by_default(
     assert exc.value.code == 2
     captured = capsys.readouterr()
     assert "refused parse-failed feature rows" in captured.err
+    assert "--write-failed-row" not in captured.err
+    assert "--allow-parse-fail" in captured.err
     assert "Traceback" not in captured.err
 
     cli.main(

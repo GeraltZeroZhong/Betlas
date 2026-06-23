@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 import time
@@ -38,6 +39,29 @@ def _validate_inputs(*, benchmark_dir: Path, input_dir: Path) -> None:
         "esmc_mean_embeddings_aligned.npz",
     ]:
         _require_file(input_dir / filename, label=f"fixed-cohort input {filename}")
+
+
+def dependency_status() -> dict[str, str]:
+    return {"catboost": "available" if importlib.util.find_spec("catboost") else "missing"}
+
+
+def write_dependency_preflight(out_dir: Path) -> dict[str, Any]:
+    status = dependency_status()
+    preflight = {
+        "status": "ok" if status["catboost"] == "available" else "failed",
+        "required_model_dependencies": ["catboost"],
+        "model_dependency_status": status,
+    }
+    (out_dir / "dependency_preflight.json").write_text(
+        json.dumps(preflight, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if status["catboost"] != "available":
+        raise RuntimeError(
+            "feature-block ablation requires CatBoost; install the reproducibility environment "
+            "or run `python -m pip install catboost` first"
+        )
+    return preflight
 
 
 def _boolish(value: object) -> bool:
@@ -190,8 +214,9 @@ def run_ablation(
     pca_dim: int,
     n_splits: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    _validate_inputs(benchmark_dir=benchmark_dir, input_dir=input_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    dependency_preflight = write_dependency_preflight(out_dir)
+    _validate_inputs(benchmark_dir=benchmark_dir, input_dir=input_dir)
     cohort = pd.read_csv(benchmark_dir / "benchmark_cohort.csv")
     cohort = cohort.loc[cohort["include_for_metrics"].map(_boolish)].reset_index(drop=True)
     y = cohort["y_true"].to_numpy(dtype=int)
@@ -296,6 +321,7 @@ def run_ablation(
                     "split_strategy": split_strategy,
                     "effective_n_splits": int(effective_splits),
                     "probability_alignment_warning": warning,
+                    "probability_calibration_status": "model_reported_uncalibrated",
                 }
             )
             fold_rows.append(fold_row)
@@ -320,6 +346,7 @@ def run_ablation(
                 "esmc_pca_dim": int(esmc_dim) if "esmc" in selected_blocks else 0,
                 "runtime_seconds": round(runtime, 3),
                 "shared_esmc_prepare_runtime_seconds": round(esmc_prepare_runtime, 3),
+                "probability_calibration_status": "model_reported_uncalibrated",
             }
         )
         summary_rows.append(summary)
@@ -329,6 +356,8 @@ def run_ablation(
         per["outer_fold"] = fold_ids
         per["pred_barrel"] = predictions.astype(bool)
         per["prob_barrel"] = scores
+        per["probability_source"] = "catboost_predict_proba"
+        per["probability_calibration_status"] = "model_reported_uncalibrated"
         per["correct"] = predictions == y
         per_record_rows.append(per)
 
@@ -354,7 +383,9 @@ def run_ablation(
         "effective_n_splits": int(effective_splits),
         "split_strategy": split_strategy,
         "probability_alignment_warnings": probability_warnings,
-        "model_dependency_status": {"catboost": "required"},
+        "dependency_preflight": "dependency_preflight.json",
+        "model_dependency_status": dependency_preflight["model_dependency_status"],
+        "probability_calibration_status": "model_reported_uncalibrated",
         "esmc_pca_dim": int(esmc_dim),
         "shared_esmc_prepare_runtime_seconds": round(esmc_prepare_runtime, 3),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),

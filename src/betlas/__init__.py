@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .constants import FOLD_LABELS
 from .examples import copy_example, list_examples
 from .features.extract import extract_feature_row, extract_structure_features
@@ -35,12 +37,21 @@ from .specs import (
     list_rule_specs,
 )
 
+try:
+    __version__ = version("betlas")
+except PackageNotFoundError:  # pragma: no cover - source-tree fallback without package metadata
+    __version__ = "0.0.0"
+
 
 def __getattr__(name: str):
     if name == "count_beta_barrel_staves":
         from .readouts.beta_barrel_staves import count_beta_barrel_staves
 
         return count_beta_barrel_staves
+    if name == "detect_beta_barrel_like":
+        from .readouts.beta_barrel_detection import detect
+
+        return detect
     if name in {
         "compute_topology_diagnostics",
         "detect_mixed_topology",
@@ -54,10 +65,12 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "__version__",
     "compute_topology_diagnostics",
     "compute_grammar_features",
     "count_beta_barrel_staves",
     "detect_mixed_topology",
+    "detect_beta_barrel_like",
     "DomainCandidate",
     "describe_column",
     "describe_feature",

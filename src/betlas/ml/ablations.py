@@ -24,6 +24,7 @@ from ..schema import normalize_feature_columns
 from .benchmark import (
     BENCHMARK_GROUP_COLUMNS,
     BENCHMARK_REQUIRED_COLUMNS,
+    _connected_group_series,
     _group_source_counts,
     _require_columns,
     _split_summary,
@@ -178,13 +179,7 @@ def _make_model(random_state: int, config: Mapping[str, Any]) -> Any:
 
 
 def _groups(df: pd.DataFrame) -> np.ndarray:
-    groups = pd.Series("", index=df.index, dtype=object)
-    for column in BENCHMARK_GROUP_COLUMNS:
-        if column not in df:
-            continue
-        values = df[column].astype(str).str.strip()
-        groups = groups.mask(groups.astype(str).str.strip() == "", values)
-    return groups.to_numpy()
+    return _connected_group_series(df, BENCHMARK_GROUP_COLUMNS).to_numpy()
 
 
 def _rate(true_labels: np.ndarray, pred_labels: np.ndarray, true_label: str, pred_label: str) -> float:
@@ -367,6 +362,7 @@ def run_ablation_suite(
     if model_name == "xgboost" and not _xgboost_available():
         dependency_status[model_name] = "unavailable: xgboost is not installed"
         dependency_error = "ablation model.name=xgboost requires the optional xgboost package"
+    missing_global_classes = sorted(set(FOLD_LABELS) - set(df["fold_label_final"].astype(str)))
     preflight = {
         "input_rows": int(len(df_all)),
         "label_filtered_rows": int(label_mask.sum()),
@@ -376,12 +372,16 @@ def run_ablation_suite(
         "parse_filter": "betlas_parse_ok == 1",
         "class_counts": {str(k): int(v) for k, v in df["fold_label_final"].value_counts().sort_index().items()},
         "group_columns_priority": list(BENCHMARK_GROUP_COLUMNS),
+        "grouping_strategy": "connected_components_across_group_columns",
         "group_source_counts": _group_source_counts(df),
         "group_count": int(pd.Series(groups).astype(str).nunique()),
         "feature_set": "raw_geometry",
         "feature_count": int(len(feature_cols)),
         "features_csv": str(features_csv),
         "model_dependency_status": dependency_status,
+        "required_global_classes": list(FOLD_LABELS),
+        "missing_global_classes": missing_global_classes,
+        "require_all_fold_labels": True,
         "effective_split_strategy": "not_run",
         "effective_n_splits": 0,
         "folds": [],
@@ -389,6 +389,24 @@ def run_ablation_suite(
     write_json(out_dir / "ablation_preflight.json", preflight)
     if dependency_error:
         raise RuntimeError(dependency_error)
+    if missing_global_classes:
+        write_json(
+            out_dir / "ablation_preflight.json",
+            {
+                **preflight,
+                "status": "failed",
+                "failure_stage": "class_coverage",
+                "effective_split_strategy": "not_run_missing_global_classes",
+                "error": (
+                    "ablation requires all Betlas fold labels before grouped CV; "
+                    f"missing global classes: {missing_global_classes}"
+                ),
+            },
+        )
+        raise ValueError(
+            "ablation requires all Betlas fold labels before grouped CV; "
+            f"missing global classes: {missing_global_classes}"
+        )
     try:
         splits, split_strategy, n_splits = make_grouped_splits(
             df[feature_cols],

@@ -235,6 +235,39 @@ def _rule_scores_from_row(row: pd.Series) -> dict[str, float]:
     return {label: float(parsed.get(label, 0.0) or 0.0) for label in FOLD_LABELS}
 
 
+def _topology_ineligible_reason(row: pd.Series) -> tuple[str, str] | None:
+    parse_ok = int(_f(row, "betlas_parse_ok", default=1.0))
+    if "betlas_parse_ok" in row.index and parse_ok != 1:
+        return (
+            "parse_failed",
+            str(row.get("betlas_error", "") or row.get("betlas_warnings", "") or "betlas_parse_ok is not 1"),
+        )
+
+    score_status = str(row.get("betlas_score_status", "") or "").strip()
+    if score_status and score_status != "ok":
+        return (score_status, f"betlas_score_status is {score_status!r}")
+
+    if "betlas_axis_best_slice_count" in row.index and _f(row, "betlas_axis_best_slice_count") <= 0.0:
+        return ("no_informative_slices", "betlas_axis_best_slice_count is 0")
+
+    scores = _rule_scores_from_row(row)
+    if not any(math.isfinite(value) and value != 0.0 for value in scores.values()):
+        return ("no_rule_score_signal", "finite nonzero Betlas rule-score signal is unavailable")
+    return None
+
+
+def _status_only_row(row: pd.Series, *, status: str, error: str) -> dict[str, Any]:
+    out_row = {column: row.get(column, "") for column in ID_COLUMNS if column in row.index}
+    out_row.update({column: "" for column in ALL_READOUT_COLUMNS})
+    out_row.update(
+        {
+            "betlas_topology_status": status,
+            "betlas_topology_error": error,
+        }
+    )
+    return out_row
+
+
 def _rule_probability_summary(row: pd.Series, config: dict[str, Any]) -> dict[str, Any]:
     scores = _rule_scores_from_row(row)
     temperature = float(cfg_get(config, "probability.rule_softmax_temperature", 1.0))
@@ -835,20 +868,12 @@ def compute_topology_diagnostics(
     neighbors = _neighbor_readouts(df, k_neighbors=k_neighbors)
     rows: list[dict[str, Any]] = []
     for index, row in df.iterrows():
-        out_row = {column: row.get(column, "") for column in ID_COLUMNS if column in row.index}
-        parse_ok = int(_f(row, "betlas_parse_ok", default=1.0))
-        if "betlas_parse_ok" in row.index and parse_ok != 1:
-            out_row.update({column: "" for column in ALL_READOUT_COLUMNS})
-            out_row.update(
-                {
-                    "betlas_topology_status": "parse_failed",
-                    "betlas_topology_error": str(
-                        row.get("betlas_error", "") or row.get("betlas_warnings", "") or "betlas_parse_ok is not 1"
-                    ),
-                }
-            )
-            rows.append(out_row)
+        ineligible = _topology_ineligible_reason(row)
+        if ineligible is not None:
+            status, error = ineligible
+            rows.append(_status_only_row(row, status=status, error=error))
             continue
+        out_row = {column: row.get(column, "") for column in ID_COLUMNS if column in row.index}
         rule_summary = _rule_probability_summary(row, config)
         continuous = _continuous_scores(row, rule_summary, config)
         prediction_summary = _prediction_summary(row)
@@ -909,7 +934,14 @@ def run_topology_diagnostics(
 
     features_path = Path(features_csv)
     if not features_path.exists():
-        raise FileNotFoundError(f"feature CSV does not exist: {features_path}")
+        hint = ""
+        if features_path == DEFAULT_FEATURES_CSV:
+            hint = (
+                "; this is the default output path. Run "
+                "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out runs/features.csv` "
+                "and pass `--features runs/features.csv`, or run the documented quickstart first"
+            )
+        raise FileNotFoundError(f"feature CSV does not exist: {features_path}{hint}")
     features = normalize_feature_columns(
         pd.read_csv(features_path, dtype=str, keep_default_na=False, low_memory=False)
     )

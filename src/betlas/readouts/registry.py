@@ -62,7 +62,7 @@ READOUTS: dict[str, ReadoutSpec] = {
         summary="Betlas native beta-barrel chain detection readout.",
         main=_beta_barrel_detection_main,
         input_protocol="PDB/mmCIF structure file or directory",
-        output_protocol="CSV rows with beta-barrel-like geometry decision, heuristic score, stage, gate, and layer evidence",
+        output_protocol="CSV rows with beta-barrel-like geometry decision, uncalibrated heuristic score, stage, gate, and layer evidence",
         requires="DSSP/mkdssp",
     ),
     "beta-barrel-staves": ReadoutSpec(
@@ -70,7 +70,7 @@ READOUTS: dict[str, ReadoutSpec] = {
         summary="Secondary readout for beta-barrel strand/stave count.",
         main=_beta_barrel_staves_main,
         input_protocol="PDB/mmCIF structure file or directory",
-        output_protocol="CSV rows with candidate stave count, heuristic confidence, gate status, and slice/layer evidence",
+        output_protocol="CSV rows with candidate stave count, uncalibrated heuristic confidence, gate status, and slice/layer evidence",
         requires="DSSP/mkdssp",
     ),
     "fold-continuous-scores": ReadoutSpec(
@@ -89,10 +89,10 @@ READOUTS: dict[str, ReadoutSpec] = {
     ),
     "topology-ambiguity": ReadoutSpec(
         name="topology-ambiguity",
-        summary="Boundary-region ambiguity score from probabilities, grammar conflicts, and neighbors.",
+        summary="Boundary-region ambiguity score from explicit model weights or uncalibrated rule-softmax weights, grammar conflicts, and neighbors.",
         main=_mode_main("ambiguity"),
         input_protocol="Betlas feature CSV with optional prediction CSV",
-        output_protocol="CSV columns for ambiguity score, probability summaries, rule conflict, and neighbor evidence",
+        output_protocol="CSV columns for ambiguity score, probability-like summaries with calibration status, rule conflict, and neighbor evidence",
     ),
     "topology-diagnostics": ReadoutSpec(
         name="topology-diagnostics",

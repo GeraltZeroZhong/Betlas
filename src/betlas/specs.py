@@ -95,8 +95,6 @@ _SCHEMA_COLUMNS = {
     "betlas_rule_margin",
     "betlas_fold_scores_json",
     "betlas_score_status",
-    "betlas_topology_status",
-    "betlas_topology_error",
 }
 _COLUMN_OVERRIDES: dict[str, dict[str, str]] = {
     "betlas_parse_ok": {
@@ -131,14 +129,14 @@ _COLUMN_OVERRIDES: dict[str, dict[str, str]] = {
     },
     "betlas_score_status": {
         "dtype": "string",
-        "range": "ok|parse_failed",
-        "definition": "Status for grammar scoring rows; parse-failed feature rows are not assigned fold calls or rule scores.",
+        "range": "ok|parse_failed|no_informative_slices",
+        "definition": "Status for grammar scoring rows; parse-failed and zero-informative-slice rows are not assigned fold calls or rule scores.",
         "missing": "empty string only for older score tables",
     },
     "betlas_topology_status": {
         "dtype": "string",
-        "range": "ok|parse_failed",
-        "definition": "Status for topology diagnostic rows; parse-failed feature rows are status-only and not assigned topology readouts.",
+        "range": "ok|parse_failed|no_informative_slices|no_rule_score_signal",
+        "definition": "Status for topology diagnostic rows; ineligible feature rows are status-only and not assigned topology readouts.",
         "missing": "empty string only for older topology diagnostic tables",
     },
     "betlas_topology_error": {
@@ -193,6 +191,84 @@ _COLUMN_OVERRIDES: dict[str, dict[str, str]] = {
         "dtype": "string",
         "range": "model_reported_uncalibrated|uncalibrated_rule_softmax",
         "definition": "Calibration status for betlas_probability_* columns; rule-softmax fallback values are not calibrated probabilities.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_probability_top1": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Top probability-like weight from explicit model predictions or, when source=rule_softmax, an uncalibrated softmax-normalized rule-score weight.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_probability_top2": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Second probability-like weight from explicit model predictions or, when source=rule_softmax, an uncalibrated softmax-normalized rule-score weight.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_probability_top2_margin": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Top1 minus top2 probability-like weight; interpret with betlas_probability_source and betlas_probability_calibration_status.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_probability_entropy": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Normalized entropy of explicit model probabilities or uncalibrated rule-softmax weights.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_rule_probability_margin": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Top1 minus top2 weight after softmax-normalizing transparent rule scores; this is rule-derived evidence, not a calibrated probability.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_rule_probability_entropy": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Normalized entropy of softmax-normalized transparent rule scores; this is rule-derived evidence, not a calibrated probability.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_rule_label_conflict": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Whether the explicit model top label or probability-like top label conflicts with the transparent rule top label.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_topology_ambiguity_score": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Topology-diagnostics ambiguity score combining probability-like margin/entropy, uncalibrated rule-softmax evidence, rule-label conflict, boundary-neighbor evidence, and configured label-pair checks.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_boundary_region_flag": {
+        "dtype": "integer",
+        "range": "{0, 1}",
+        "definition": "Topology-diagnostics flag for rows whose ambiguity evidence crosses the configured boundary-region threshold.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_neighbor_label_entropy": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Normalized entropy of neighboring labels used by topology ambiguity diagnostics.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_neighbor_disagreement_fraction": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Fraction of neighboring records whose topology label differs from the current row label.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_boundary_neighbor_fraction": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Fraction of nearest neighbors counted as boundary-neighbor evidence for topology ambiguity diagnostics.",
+        "missing": "empty string when topology diagnostics were not computed",
+    },
+    "betlas_boundary_neighbor_similarity": {
+        "dtype": "numeric",
+        "range": "[0, 1]",
+        "definition": "Similarity-weighted boundary-neighbor support used by topology ambiguity diagnostics.",
         "missing": "empty string when topology diagnostics were not computed",
     },
     "betlas_rule_top1_label": {
@@ -435,16 +511,15 @@ def _column_spec_from_feature(feature: FeatureSpec) -> ColumnSpec:
 
 def _source_columns() -> set[str]:
     from .features import extract, rules
-    from .readouts.topology_diagnostics import core as topology_core
 
     text = "\n".join(
         [
             inspect.getsource(extract),
             inspect.getsource(rules),
-            inspect.getsource(topology_core),
         ]
     )
     columns = set(re.findall(r"betlas_[A-Za-z0-9_]+", text))
+    columns.difference_update(_SUMMARY_PREFIXES)
     for prefix in _SUMMARY_PREFIXES:
         columns.update(f"{prefix}_{suffix}" for suffix in _SUMMARY_SUFFIXES)
     columns.update(f"betlas_axis_best_{key}" for key in _AXIS_SLICE_KEYS)
@@ -452,8 +527,6 @@ def _source_columns() -> set[str]:
     columns.update({"betlas_axis_slice_name", "betlas_axis_slice_score"})
     columns.update(f"betlas_angular_fft_k{k}" for k in range(3, 9))
     columns.update(f"betlas_rule_score_{label}" for label in FOLD_LABELS)
-    for names in topology_core.MODE_COLUMNS.values():
-        columns.update(str(name) for name in names if str(name).startswith("betlas_"))
     columns.update(_SCHEMA_COLUMNS)
     return columns
 
@@ -716,9 +789,27 @@ def _readout_column_definition(readout: str, column: str) -> tuple[str, str, str
             "Candidate beta-barrel stave or strand count reported by the staves readout.",
             "non-negative integer",
         )
+    if column in {
+        "betlas_jelly_sandwich_overlap",
+        "betlas_barrel_sandwich_overlap",
+        "betlas_barrel_jelly_overlap",
+    }:
+        return (
+            "readout",
+            "numeric",
+            "Continuous topology overlap score between two topology evidence channels; high values indicate both channels are simultaneously supported.",
+            "[0, 1]",
+        )
     if column.startswith("betlas_"):
-        feature = describe_feature(column)
-        return ("readout", feature.dtype, feature.definition, feature.value_range)
+        try:
+            feature = describe_feature(column)
+            return ("readout", feature.dtype, feature.definition, feature.value_range)
+        except KeyError:
+            override = _COLUMN_OVERRIDES.get(column, {})
+            dtype = override.get("dtype", _dtype_for_column(column))
+            definition = override.get("definition", f"{readout} readout-only Betlas column.")
+            value_range = override.get("range", _range_for_column(column))
+            return ("readout", dtype, definition, value_range)
     if column.endswith("_flag") or column.startswith("guard_") or column.startswith("barrel_gate_"):
         return ("status", "numeric/string", "Readout guard, gate, or status field.", "categorical/string")
     if "count" in column or column.endswith("_layers") or column.endswith("_residues"):

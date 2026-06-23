@@ -316,6 +316,13 @@ def test_public_cli_help_uses_release_surface_terms(capsys) -> None:
         _assert_clean_public_text("betlas " + " ".join(command), capsys.readouterr().out)
 
 
+def test_public_cli_exposes_root_version(capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.startswith("betlas ")
+
+
 def test_topology_alias_help_is_mode_specific(capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         cli.main(["readout", "fold-continuous-scores", "--help"])

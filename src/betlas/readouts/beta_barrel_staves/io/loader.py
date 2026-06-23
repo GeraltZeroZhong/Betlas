@@ -470,6 +470,7 @@ class ProteinLoader:
             self._run_secondary_structure()
 
         data = []
+        chain_residue_ids = {res.id for res in chain}
         for res in chain:
             if not is_aa(res, standard=False):
                 continue
@@ -477,9 +478,20 @@ class ProteinLoader:
                 continue
 
             dssp_key = (chain.id, res.id)
+            hetfield, resseq, icode = res.id
             ss_code = "-"
-            if self.secondary_structure and dssp_key in self.secondary_structure:
-                ss_code = self.secondary_structure[dssp_key]
+            if self.secondary_structure:
+                if dssp_key in self.secondary_structure:
+                    ss_code = self.secondary_structure[dssp_key]
+                else:
+                    fallback_id = (" ", resseq, icode)
+                    fallback_key = (chain.id, fallback_id)
+                    if (
+                        hetfield != " "
+                        and fallback_id not in chain_residue_ids
+                        and fallback_key in self.secondary_structure
+                    ):
+                        ss_code = self.secondary_structure[fallback_key]
 
             data.append(
                 {

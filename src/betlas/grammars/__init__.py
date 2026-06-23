@@ -26,11 +26,15 @@ class GrammarSpec:
         return column in self.columns or any(column.startswith(prefix) for prefix in self.column_prefixes)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..specs import list_feature_specs
+        from ..specs import list_feature_specs, list_readout_column_specs
 
-        resolved_columns = [
-            feature.name for feature in list_feature_specs() if self.matches_column(feature.name)
-        ]
+        resolved_columns = sorted(
+            {
+                spec.name
+                for spec in (*list_feature_specs(), *list_readout_column_specs())
+                if self.matches_column(spec.name)
+            }
+        )
         return {
             "name": self.name,
             "summary": self.summary,
@@ -441,6 +445,7 @@ _GRAMMAR_SPECS = tuple(
 )
 
 _GRAMMAR_BY_NAME = {spec.name: spec for spec in _GRAMMAR_SPECS}
+_READOUT_ONLY_GRAMMARS = {"continuous_topology", "topology_ambiguity", "mixed_topology"}
 
 
 def list_grammars() -> tuple[GrammarSpec, ...]:
@@ -458,11 +463,18 @@ def compute_grammar_features(
     geometry: StructureGeometry,
     grammars: str | list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, float | int | str]:
-    features = normalize_feature_mapping(extract_signature(geometry).features)
     if grammars is None:
+        features = normalize_feature_mapping(extract_signature(geometry).features)
         return dict(features)
 
     names = (grammars,) if isinstance(grammars, str) else tuple(grammars)
+    readout_only = sorted(set(names) & _READOUT_ONLY_GRAMMARS)
+    if readout_only:
+        raise ValueError(
+            "compute_grammar_features only computes deterministic geometry grammars from StructureGeometry; "
+            f"{readout_only} are readout-only grammars. Use betlas.readouts.topology_diagnostics instead."
+        )
+    features = normalize_feature_mapping(extract_signature(geometry).features)
     specs = tuple(get_grammar(name) for name in names)
     return {
         column: value
