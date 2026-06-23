@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import urllib.parse
 import urllib.request
+import zipfile
 from collections.abc import Iterable
 from importlib import resources
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any
 
 import yaml
 
-DEFAULT_ASSET_BASE_URL = "https://github.com/GeraltZeroZhong/Betlas/releases/download/betlas-assets-future-release/"
+DEFAULT_ASSET_BASE_URL = "https://github.com/GeraltZeroZhong/Betlas/releases/download/v1.0.0/"
 ASSET_BASE_URL_ENV = "BETLAS_ASSET_BASE_URL"
 ASSET_DIR_ENV = "BETLAS_ASSET_DIR"
 ESMC_WEIGHTS_ENV = "BETLAS_ESMC_WEIGHTS"
@@ -280,6 +281,15 @@ def _download_source(file_info: dict[str, Any], base_url: str | None = None) -> 
     return str(Path(base).expanduser() / path)
 
 
+def _bundle_source(manifest: dict[str, Any], base_url: str | None = None) -> str:
+    bundle = _validate_download_path(str(manifest["bundle"]))
+    base = _base_url(base_url)
+    base_parsed = urllib.parse.urlparse(base)
+    if base_parsed.scheme in {"http", "https", "file"}:
+        return urllib.parse.urljoin(base.rstrip("/") + "/", bundle.lstrip("/"))
+    return str(Path(base).expanduser() / bundle)
+
+
 def _using_explicit_base_url(base_url: str | None = None) -> bool:
     return base_url is not None or ASSET_BASE_URL_ENV in os.environ
 
@@ -318,17 +328,46 @@ def _verify_file(path: Path, file_info: dict[str, Any]) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _copy_from_source(source: str, target: Path) -> None:
+def _copy_source_to_path(source: str, target: Path) -> None:
     parsed = urllib.parse.urlparse(source)
-    try:
-        if parsed.scheme in {"http", "https", "file"}:
-            with urllib.request.urlopen(source, timeout=_URL_TIMEOUT_SECONDS) as response, target.open("wb") as handle:
-                shutil.copyfileobj(response, handle)
-            return
-        with Path(source).expanduser().open("rb") as response, target.open("wb") as handle:
+    if parsed.scheme in {"http", "https", "file"}:
+        with urllib.request.urlopen(source, timeout=_URL_TIMEOUT_SECONDS) as response, target.open("wb") as handle:
             shutil.copyfileobj(response, handle)
+        return
+    with Path(source).expanduser().open("rb") as response, target.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+
+
+def _copy_from_source(source: str, target: Path) -> None:
+    try:
+        _copy_source_to_path(source, target)
     except Exception as exc:  # pragma: no cover - exact network errors vary by platform
         raise AssetError(f"could not copy asset file from {source!r}: {exc}") from exc
+
+
+def _materialize_zip_bundle(bundle_source: str, target_dir: Path) -> Path:
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, dir=str(target_dir), prefix=".bundle.", suffix=".zip") as handle:
+            bundle_tmp = Path(handle.name)
+        _copy_source_to_path(bundle_source, bundle_tmp)
+    except Exception as exc:  # pragma: no cover - exact network/zip errors vary by platform
+        raise AssetError(f"could not copy asset bundle from {bundle_source!r}: {exc}") from exc
+    return bundle_tmp
+
+
+def _copy_from_zip_bundle_file(bundle_path: Path, member_path: str, target: Path) -> None:
+    member = _validate_download_path(member_path)
+    try:
+        with zipfile.ZipFile(bundle_path) as zf:
+            try:
+                with zf.open(member) as response, target.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
+            except KeyError as exc:
+                raise AssetError(f"bundle {bundle_path!s} does not contain {member!r}") from exc
+    except AssetError:
+        raise
+    except Exception as exc:  # pragma: no cover - exact zip errors vary by platform
+        raise AssetError(f"could not copy asset file {member!r} from bundle {bundle_path!s}: {exc}") from exc
 
 
 def list_assets() -> tuple[str, ...]:
@@ -487,36 +526,53 @@ def download_asset(
     root = _asset_root(asset_id, cache_dir)
     root.mkdir(parents=True, exist_ok=True)
     downloaded: list[Path] = []
+    bundle_tmp: Path | None = None
+    bundle_source: str | None = None
+    try:
+        for file_info in _select_files(manifest, filenames):
+            target = _asset_file_path(root, file_info)
+            if target.exists() and not force:
+                ok, reason = _verify_file(target, file_info)
+                if ok:
+                    downloaded.append(target)
+                    continue
+                raise AssetError(f"cached file failed verification ({target}): {reason}; use force=True to replace it")
 
-    for file_info in _select_files(manifest, filenames):
-        target = _asset_file_path(root, file_info)
-        if target.exists() and not force:
-            ok, reason = _verify_file(target, file_info)
-            if ok:
-                downloaded.append(target)
-                continue
-            raise AssetError(f"cached file failed verification ({target}): {reason}; use force=True to replace it")
-
-        source = _download_source(file_info, base_url=base_url)
-        tmp_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                dir=str(root),
-                prefix=f".{target.name}.",
-                suffix=".tmp",
-            ) as handle:
-                tmp_path = Path(handle.name)
-            _copy_from_source(source, tmp_path)
-            ok, reason = _verify_file(tmp_path, file_info)
-            if not ok:
-                raise AssetError(f"downloaded file failed verification ({target.name}): {reason}")
-            os.replace(tmp_path, target)
-            tmp_path = None
-        finally:
-            if tmp_path is not None and tmp_path.exists():
-                tmp_path.unlink()
-        downloaded.append(target)
+            source = _download_source(file_info, base_url=base_url)
+            tmp_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    delete=False,
+                    dir=str(root),
+                    prefix=f".{target.name}.",
+                    suffix=".tmp",
+                ) as handle:
+                    tmp_path = Path(handle.name)
+                try:
+                    _copy_from_source(source, tmp_path)
+                except AssetError as direct_exc:
+                    bundle_source = bundle_source or _bundle_source(manifest, base_url=base_url)
+                    if bundle_tmp is None:
+                        bundle_tmp = _materialize_zip_bundle(bundle_source, root)
+                    try:
+                        _copy_from_zip_bundle_file(bundle_tmp, str(file_info["download_path"]), tmp_path)
+                    except AssetError as bundle_exc:
+                        raise AssetError(
+                            f"could not download {target.name!r} from {source!r} or bundle "
+                            f"{bundle_source!r}: direct={direct_exc}; bundle={bundle_exc}"
+                        ) from bundle_exc
+                ok, reason = _verify_file(tmp_path, file_info)
+                if not ok:
+                    raise AssetError(f"downloaded file failed verification ({target.name}): {reason}")
+                os.replace(tmp_path, target)
+                tmp_path = None
+            finally:
+                if tmp_path is not None and tmp_path.exists():
+                    tmp_path.unlink()
+            downloaded.append(target)
+    finally:
+        if bundle_tmp is not None and bundle_tmp.exists():
+            bundle_tmp.unlink()
     return tuple(downloaded)
 
 

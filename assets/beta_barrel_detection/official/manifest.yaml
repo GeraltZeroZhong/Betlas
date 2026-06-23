@@ -3,8 +3,8 @@ asset_id: betlas-beta-barrel-detection-official-v1
 asset_type: official_readout_bundle
 readout: beta_barrel_detection
 profile: betlas_151_layer_radial16_official
-release_status: pending_release
-bundle: pending-local-mirror.zip
+release_status: released
+bundle: betlas-beta-barrel-detection-official-v1.zip
 bundle_subdir: beta_barrel_detection/official
 generated_by:
   - scripts/reproducibility/readout_benchmarks/beta_barrel_detection/run_betlas151_layer_radial16_official.py

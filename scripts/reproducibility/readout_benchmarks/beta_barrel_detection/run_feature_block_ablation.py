@@ -614,9 +614,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "  --input-dir/layer_radial16_feature_manifest.csv\n"
             "  --input-dir/layer_radial16_feature_values.csv\n"
             "  --input-dir/esmc_mean_embeddings_aligned.npz\n\n"
-            "Clean clones can pass --asset-id betlas-beta-barrel-detection-official-v1 after caching, or "
-            "--download-assets with --asset-base-url/BETLAS_ASSET_BASE_URL pointing to a local mirror while "
-            "the packaged manifest is pending_release.\n\n"
+            "Clean clones can pass --download-assets to fetch the official release bundle, "
+            "or --asset-id betlas-beta-barrel-detection-official-v1 after caching. "
+            "--asset-base-url/BETLAS_ASSET_BASE_URL may point to a local mirror.\n\n"
             "Outputs: feature_block_ablation_summary.csv, fold metrics, per-record predictions, metadata JSON."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -633,12 +633,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--download-assets",
         action="store_true",
-        help="Download and verify selected asset files before running. Pending assets require a local mirror.",
+        help="Download and verify selected asset files before running.",
     )
     parser.add_argument(
         "--asset-base-url",
         default=None,
-        help="Local mirror base URL/path used with --download-assets while packaged manifests are pending_release.",
+        help="Optional release base URL/path or local mirror used with --download-assets.",
     )
     parser.add_argument("--benchmark-dir", type=Path, default=DEFAULT_BENCHMARK_DIR)
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR)

@@ -141,7 +141,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_ALIGNED_DIR,
         help=(
             "Directory containing fixed-cohort aligned input CSV/NPZ files. "
-            "Clean clones should prefer --download-assets with a local mirror or --asset-id after caching."
+            "Clean clones should prefer --download-assets or --asset-id after caching."
         ),
     )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
@@ -151,7 +151,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_LAYER_VALUES_CSV,
         help=(
             "LayerRadial16 feature-values CSV. Clean clones should prefer --download-assets "
-            "with a local mirror or --asset-id after caching."
+            "or --asset-id after caching."
         ),
     )
     parser.add_argument("--iterations", type=int, default=500)
@@ -174,8 +174,8 @@ def _require_file(path: Path, *, label: str) -> Path:
     if not path.exists():
         raise FileNotFoundError(
             f"{label} does not exist: {path}. This companion runner needs the fixed-cohort "
-            "asset payload; use --download-assets with BETLAS_ASSET_BASE_URL=<local mirror>, "
-            "use --asset-id after caching, or pass explicit local input paths."
+            "asset payload; use --download-assets, use --asset-id after caching, "
+            "or pass explicit local input paths."
         )
     if not path.is_file():
         raise FileNotFoundError(f"{label} is not a file: {path}")

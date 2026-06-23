@@ -96,7 +96,7 @@ betlas readout beta-barrel-staves --check-env
 | Feature CSV with labels | `betlas benchmark --features runs/features.csv --out-dir runs/benchmark` | Rows with `betlas_parse_ok != 1` are filtered from benchmark fits. |
 | Feature CSV without labels | `betlas grammar score --features runs/features.csv --out runs/rule_scores.csv` | Requires parse-ok rows and grammar input columns by default. |
 | Prediction CSV from another model | `betlas readout topology-diagnostics --features runs/features.csv --predictions runs/predictions.csv --out runs/topology.csv` | Prediction paths are checked before diagnostics are written. |
-| Local mirror of Betlas assets | `BETLAS_ASSET_BASE_URL=/mirror/betlas-assets betlas assets download ASSET_ID` | Use this for fixed-cohort assets while the packaged manifests are marked `pending_release`. |
+| Betlas release assets | `betlas assets download betlas-beta-barrel-detection-official-v1` | Downloads and verifies the published fixed-cohort bundle; pass `--base-url` for an offline mirror. |
 
 ## Quickstart
 
@@ -240,9 +240,14 @@ source/calibration columns accordingly. If `--predictions PATH` is provided and
 the file is not present, Betlas reports that input problem before writing a
 diagnostic table.
 
-### Asset Mirror
+### Asset Downloads And Mirrors
 
-An asset mirror must match the manifest `download_path` layout. For example:
+Published Betlas assets are described by packaged manifests. The default
+release URL provides zip bundles; Betlas verifies each extracted file against
+the manifest byte size and SHA-256 hash.
+
+For offline or institutional mirrors, provide either the release zip bundles or
+a directory that matches the manifest `download_path` layout. For example:
 
 ```text
 /mirror/betlas-assets/
@@ -444,9 +449,9 @@ chain_a = detect_beta_barrel_like("structure.cif", overrides=["input.chain_id=A"
 ## Assets And Reproducibility
 
 Betlas ships asset manifests in the package. Large payloads are verified
-against those manifests before use. While the official asset payload is still
-pending, fixed-cohort workflows use a local mirror whose layout matches the
-manifest `download_path` values.
+against those manifests before use. Official fixed-cohort payloads are released
+as asset bundles; local mirrors can use the same zip files or unpacked
+`download_path` layout.
 The detection asset manifest covers the packaged official run bundle. The
 staves asset manifest is scoped to the fixed-cohort runner inputs; staves
 official outputs, preflight files, and metadata are generated locally by the
@@ -458,15 +463,18 @@ betlas assets describe betlas-beta-barrel-detection-official-v1
 betlas assets describe betlas-beta-barrel-staves-official-v1
 ```
 
-While a manifest reports `pending_release`, point Betlas at a local mirror:
+Download and verify the official assets:
 
 ```bash
-BETLAS_ASSET_BASE_URL=/mirror/betlas-assets \
-  betlas assets download betlas-beta-barrel-detection-official-v1
+betlas assets download betlas-beta-barrel-detection-official-v1
+betlas assets download betlas-beta-barrel-staves-official-v1
 
 betlas assets verify betlas-beta-barrel-detection-official-v1 --strict
 betlas assets path betlas-beta-barrel-detection-official-v1 --file betlas_151_chain_features.csv --must-exist
 ```
+
+For a local mirror, add `--base-url /mirror/betlas-assets` or set
+`BETLAS_ASSET_BASE_URL=/mirror/betlas-assets`.
 
 ESM-C handling:
 
@@ -495,7 +503,7 @@ written under ignored run directories such as `runs/...`.
 | `strict validation failed` | Required grammar input columns are absent or nonnumeric. | Generate features with `betlas extract-features`; use `--no-strict` for exploratory diagnostics on partial tables. |
 | `no beta-sheet segments` from `slice` | Selected chain lacks parsed beta-sheet segments. | Confirm chain id and mmCIF `_struct_sheet_range` records. |
 | DSSP not found | `mkdssp` is missing from `PATH`. | Install DSSP and pass `runtime.dssp_bin_path=/path/to/mkdssp` when needed. |
-| Asset download reports `pending_release` | The official payload for that manifest has not been published yet. | Set `BETLAS_ASSET_BASE_URL` or `--base-url` to a local mirror. |
+| Asset download error | The release URL or local mirror is unreachable, or a downloaded file failed hash/size verification. | Retry with network access, or set `BETLAS_ASSET_BASE_URL` / `--base-url` to a verified local mirror. |
 | Prediction file error in topology diagnostics | `--predictions` was provided but the file does not exist or lacks usable probability columns. | Provide the CSV or omit `--predictions` to use uncalibrated rule-softmax weights. |
 | Stave command asks for a gate | Broad candidate counting is designed to run with upstream detection evidence. | Pass `--barrel-decisions runs/detection.csv` or use `--allow-ungated` for exploratory counting. |
 
