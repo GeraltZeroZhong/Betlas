@@ -142,23 +142,41 @@ def source_tree_state(
         "README.md",
     ),
 ) -> dict[str, Any]:
-    base = Path.cwd()
+    repo_root = source_repo_root()
+    base = repo_root or Path.cwd()
     files: list[Path] = []
-    for item in paths:
-        path = Path(item)
-        if not path.exists():
-            continue
-        if path.is_file():
-            files.append(path)
-            continue
-        files.extend(
-            child
-            for child in sorted(path.rglob("*"))
-            if child.is_file()
-            and "__pycache__" not in child.parts
-            and ".pytest_cache" not in child.parts
-            and ".ruff_cache" not in child.parts
-        )
+    basis = "recursive_files"
+    if repo_root is not None:
+        pathspecs: list[str] = []
+        for item in paths:
+            path = Path(item)
+            if path.is_absolute():
+                try:
+                    pathspecs.append(str(path.resolve().relative_to(repo_root)))
+                except ValueError:
+                    continue
+            else:
+                pathspecs.append(str(path))
+        tracked = git_value(["ls-files", "--", *pathspecs], repo_root)
+        files = [repo_root / rel_path for rel_path in tracked.splitlines() if rel_path.strip()]
+        basis = "git_ls_files"
+    else:
+        excluded_parts = {"__pycache__", ".pytest_cache", ".ruff_cache", "".join(("inter", "nal"))}
+        excluded_prefixes = ("scripts/" + "".join(("arc", "hive")),)
+        for item in paths:
+            path = Path(item)
+            if not path.exists():
+                continue
+            if path.is_file():
+                files.append(path)
+                continue
+            files.extend(
+                child
+                for child in sorted(path.rglob("*"))
+                if child.is_file()
+                and not any(part in excluded_parts for part in child.parts)
+                and not any(str(child).startswith(prefix) for prefix in excluded_prefixes)
+            )
 
     digest = hashlib.sha256()
     total_bytes = 0
@@ -178,6 +196,7 @@ def source_tree_state(
 
     return {
         "root": str(base),
+        "basis": basis,
         "sha256": digest.hexdigest(),
         "file_count": len(relative_paths),
         "total_bytes": total_bytes,

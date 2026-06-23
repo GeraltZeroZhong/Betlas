@@ -74,6 +74,8 @@ AMBIGUITY_COLUMNS = [
     "betlas_probability_top2",
     "betlas_probability_top2_margin",
     "betlas_probability_entropy",
+    "betlas_probability_source",
+    "betlas_probability_calibration_status",
     "betlas_rule_top1_label",
     "betlas_rule_top2_label",
     "betlas_rule_probability_margin",
@@ -364,6 +366,11 @@ def _prepare_prediction_frame(
     return pred
 
 
+def _prediction_frame_has_signal(predictions: pd.DataFrame) -> bool:
+    prob_cols = [f"prob_{label}" for label in FOLD_LABELS]
+    return all(column in predictions.columns for column in prob_cols) or "pred_probability" in predictions.columns
+
+
 def _prediction_summary(row: pd.Series) -> dict[str, Any]:
     prob_cols = [f"prob_{label}" for label in FOLD_LABELS]
     if all(column in row.index for column in prob_cols):
@@ -382,6 +389,8 @@ def _prediction_summary(row: pd.Series) -> dict[str, Any]:
                 "top2_probability": float(probs[top2]),
                 "margin": float(probs[top1] - probs[top2]),
                 "entropy": _entropy(probs),
+                "source": "prediction",
+                "calibration_status": "model_reported_uncalibrated",
             }
 
     pred_label = str(row.get("pred_label", "") or "")
@@ -401,6 +410,8 @@ def _prediction_summary(row: pd.Series) -> dict[str, Any]:
         "top2_probability": top2_probability,
         "margin": margin,
         "entropy": float("nan"),
+        "source": "prediction",
+        "calibration_status": "model_reported_uncalibrated",
     }
 
 
@@ -602,6 +613,10 @@ def _ambiguity_readouts(
         "betlas_probability_top2": float(prediction_summary.get("top2_probability", rule_summary["top2_probability"])),
         "betlas_probability_top2_margin": prob_margin,
         "betlas_probability_entropy": probability_entropy,
+        "betlas_probability_source": str(prediction_summary.get("source", "rule_softmax") or "rule_softmax"),
+        "betlas_probability_calibration_status": str(
+            prediction_summary.get("calibration_status", "uncalibrated_rule_softmax") or "uncalibrated_rule_softmax"
+        ),
         "betlas_rule_top1_label": rule_top,
         "betlas_rule_top2_label": rule_second,
         "betlas_rule_probability_margin": float(rule_summary["margin"]),
@@ -770,9 +785,15 @@ def compute_topology_diagnostics(
     if predictions is not None and predictions_required and pred is None:
         raise ValueError(
             "prediction CSV was provided but no usable prediction rows were found for "
-            "the requested model/key columns; omit --predictions to use grammar-rule probabilities"
+            "the requested model/key columns; omit --predictions to use rule-softmax weights"
         )
     if pred is not None:
+        if predictions_required and not _prediction_frame_has_signal(pred):
+            raise ValueError(
+                "prediction CSV matched the requested model/key columns but lacks usable probability "
+                f"columns; expected either prob_<label> columns for {list(FOLD_LABELS)} or finite "
+                "pred_probability values. Omit --predictions to use rule-softmax weights"
+            )
         left_keys = _prediction_key_columns(df)
         right_keys = _prediction_key_columns(pred)
         if left_keys and right_keys and left_keys == right_keys:
@@ -793,13 +814,22 @@ def compute_topology_diagnostics(
                     raise ValueError(
                         "prediction CSV did not match every parse-ok feature row "
                         f"for keys {left_keys}: matched {matched}/{expected}; "
-                        "omit --predictions to use grammar-rule probabilities"
+                        "omit --predictions to use rule-softmax weights"
+                    )
+                usable = df.apply(lambda row: bool(_prediction_summary(row).get("available")), axis=1)
+                usable_count = int(usable.loc[parse_ok].sum())
+                if usable_count < expected:
+                    raise ValueError(
+                        "prediction CSV matched parse-ok feature rows but lacks usable probability "
+                        f"signals for {expected - usable_count}/{expected} row(s); expected positive "
+                        "prob_<label> totals or finite pred_probability values. Omit --predictions "
+                        "to use rule-softmax weights"
                     )
             df = df.drop(columns=[prediction_marker], errors="ignore")
         elif predictions_required:
             raise ValueError(
                 "prediction CSV key columns do not match feature CSV key columns; "
-                "omit --predictions to use grammar-rule probabilities"
+                "omit --predictions to use rule-softmax weights"
             )
 
     neighbors = _neighbor_readouts(df, k_neighbors=k_neighbors)
@@ -891,7 +921,7 @@ def run_topology_diagnostics(
                 predictions_path = None
             else:
                 raise FileNotFoundError(
-                    f"prediction CSV does not exist: {predictions_path}; omit --predictions or pass --no-predictions to use grammar-rule probabilities"
+                    f"prediction CSV does not exist: {predictions_path}; omit --predictions or pass --no-predictions to use rule-softmax weights"
                 )
         if predictions_path is not None:
             predictions = pd.read_csv(predictions_path, dtype=str, keep_default_na=False, low_memory=False)

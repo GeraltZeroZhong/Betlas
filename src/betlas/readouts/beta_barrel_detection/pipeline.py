@@ -116,6 +116,8 @@ def _prepare_error_rows(errors: list[str]) -> list[dict[str, object]]:
                 "result": "ERROR",
                 "result_stage": "prepare",
                 "reason": detail.strip() or error,
+                "score_type": "not_applicable",
+                "calibration_status": "not_applicable",
             }
         )
     return rows

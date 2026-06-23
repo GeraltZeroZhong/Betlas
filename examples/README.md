@@ -8,6 +8,9 @@ It is intentionally minimal and is not a DSSP readout fixture; for
 `beta-barrel-detection` or `beta-barrel-staves`, use a full PDB/mmCIF with the
 standard atom-site fields required by Biopython/DSSP.
 
+Run the commands below from the repository root. The `PYTHONPATH=src` prefix is
+relative to that root.
+
 ```bash
 mkdir -p runs/examples
 PYTHONPATH=src python -m betlas extract-features \

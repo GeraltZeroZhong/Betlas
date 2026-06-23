@@ -391,7 +391,7 @@ _GRAMMAR_DETAILS: dict[str, dict[str, tuple[str, ...] | str]] = {
     "continuous_topology": {
         "math_summary": "Jelly-rollness, sandwichness, and barrel-likeness are weighted means of normalized grammar evidence. Each pairwise overlap is clip01(min(score_a, score_b) * (1 - abs(score_a - score_b))), so overlap is high only when both topology scores are high and similar.",
         "inputs": (
-            "Grammar-rule probabilities, sheet topology features, packing features, and closure features.",
+            "Uncalibrated rule-softmax weights, sheet topology features, packing features, and closure features.",
         ),
         "outputs": (
             "Continuous topology scores, basis JSON columns, and pairwise overlap columns.",
@@ -403,13 +403,13 @@ _GRAMMAR_DETAILS: dict[str, dict[str, tuple[str, ...] | str]] = {
     "topology_ambiguity": {
         "math_summary": "Ambiguity combines probability entropy, top-two probability margin, rule/model disagreement, boundary-neighbor evidence, and YAML-defined boundary label-pair checks.",
         "inputs": (
-            "Betlas feature tables, optional prediction tables, grammar-rule probabilities, and nearest-neighbor feature space.",
+            "Betlas feature tables, optional prediction tables, uncalibrated rule-softmax weights, and nearest-neighbor feature space.",
         ),
         "outputs": (
             "Topology ambiguity score, level, reasons, probability summaries, rule summaries, and boundary-neighbor columns.",
         ),
         "implementation_notes": (
-            "When prediction tables are absent, grammar-rule probabilities are used as the probability source.",
+            "When prediction tables are absent, uncalibrated rule-softmax weights are used as the probability source.",
         ),
     },
     "mixed_topology": {

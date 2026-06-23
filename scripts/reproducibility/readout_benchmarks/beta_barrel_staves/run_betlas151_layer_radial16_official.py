@@ -37,7 +37,7 @@ if str(REPO_ROOT) not in sys.path:
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from betlas.assets import resolve_asset_path  # noqa: E402
+from betlas.assets import asset_file_report, resolve_asset_path  # noqa: E402
 
 DEFAULT_ALIGNED_DIR = (
     REPO_ROOT
@@ -52,6 +52,17 @@ DEFAULT_OUT_DIR = (
 DEFAULT_LAYER_VALUES_CSV = DEFAULT_ALIGNED_DIR / "layer_radial16_feature_values.csv"
 DEFAULT_ASSET_ID = "betlas-beta-barrel-staves-official-v1"
 COMPAT_REFERENCE_COUNT_COLUMN = "".join(("go", "ld"))
+ALIGNED_ASSET_FILES = (
+    "per_record_aligned_wide.csv",
+    "feature_columns_151.csv",
+    "betlas_151_chain_features.csv",
+    "esmc_mean_embeddings_aligned.npz",
+    "esmc_embedding_coverage.csv",
+)
+
+
+def _unique_in_order(values: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(values))
 
 
 LAYER_RADIAL_RAW: list[str] = [
@@ -562,20 +573,32 @@ def _main() -> int:
     asset_cache_dir = args.asset_cache_dir.expanduser().resolve() if args.asset_cache_dir else None
     aligned_dir = args.aligned_dir.expanduser().resolve()
     layer_values_csv = args.layer_values_csv.expanduser().resolve()
+    asset_files_used: list[str] = []
+    asset_manifest_verification: dict[str, object] = {}
     if asset_id:
         if args.aligned_dir == DEFAULT_ALIGNED_DIR:
+            asset_files_used.extend(ALIGNED_ASSET_FILES)
             aligned_dir = resolve_asset_path(
                 asset_id,
                 cache_dir=asset_cache_dir,
                 download=bool(args.download_assets),
             ).resolve()
         if args.layer_values_csv == DEFAULT_LAYER_VALUES_CSV:
+            asset_files_used.append("layer_radial16_feature_values.csv")
             layer_values_csv = resolve_asset_path(
                 asset_id,
                 "layer_radial16_feature_values.csv",
                 cache_dir=asset_cache_dir,
                 download=bool(args.download_assets),
             ).resolve()
+        selected_asset_files = _unique_in_order(asset_files_used)
+        if selected_asset_files:
+            asset_manifest_verification = asset_file_report(
+                asset_id,
+                cache_dir=asset_cache_dir,
+                filenames=selected_asset_files,
+                strict=True,
+            )
     out_dir = args.out_dir.expanduser().resolve()
     _validate_inputs(aligned_dir=aligned_dir, layer_values_csv=layer_values_csv)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -701,6 +724,7 @@ def _main() -> int:
     metadata = {
         "asset_id": asset_id or "",
         "asset_cache_dir": display_path(asset_cache_dir) if asset_cache_dir is not None else "",
+        "asset_manifest_verification": asset_manifest_verification,
         "aligned_dir": display_path(aligned_dir),
         "out_dir": display_path(out_dir),
         "n_records": int(len(rows)),

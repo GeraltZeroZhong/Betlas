@@ -24,12 +24,18 @@ _PACKAGE_MANIFEST_ROOT = "asset_manifests"
 _URL_TIMEOUT_SECONDS = 30
 _PENDING_RELEASE_STATUS = "pending_release"
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_SUPPORTED_SCHEMA_VERSION = "betlas.asset-manifest.v1"
 _REQUIRED_TOP_LEVEL_FIELDS = (
+    "schema_version",
     "asset_id",
     "asset_type",
     "readout",
     "profile",
     "release_status",
+    "bundle",
+    "bundle_subdir",
+    "generated_by",
+    "source_inputs",
     "files",
 )
 _REQUIRED_FILE_FIELDS = (
@@ -158,6 +164,60 @@ def _validate_download_path(download_path: str) -> str:
     return normalized
 
 
+def _validate_non_empty_string_list(value: Any, *, field: str, asset_id: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise AssetError(f"asset manifest {asset_id} field {field} must be a non-empty list")
+    values = [str(item).strip() for item in value]
+    if any(not item for item in values):
+        raise AssetError(f"asset manifest {asset_id} field {field} contains an empty value")
+    return values
+
+
+def _validate_manifest_contract(manifest: dict[str, Any]) -> dict[str, Any]:
+    asset_id = _validate_asset_id(str(manifest.get("asset_id", "")).strip())
+    schema_version = str(manifest.get("schema_version", "")).strip()
+    if schema_version != _SUPPORTED_SCHEMA_VERSION:
+        raise AssetError(
+            f"asset manifest {asset_id} has unsupported schema_version {schema_version!r}; "
+            f"expected {_SUPPORTED_SCHEMA_VERSION!r}"
+        )
+    manifest["asset_id"] = asset_id
+    manifest["schema_version"] = schema_version
+    manifest["bundle"] = _validate_download_path(str(manifest.get("bundle", "")))
+    bundle_subdir = _validate_download_path(str(manifest.get("bundle_subdir", "")))
+    manifest["bundle_subdir"] = bundle_subdir
+    manifest["generated_by"] = _validate_non_empty_string_list(
+        manifest.get("generated_by"),
+        field="generated_by",
+        asset_id=asset_id,
+    )
+    manifest["source_inputs"] = _validate_non_empty_string_list(
+        manifest.get("source_inputs"),
+        field="source_inputs",
+        asset_id=asset_id,
+    )
+    manifest["files"] = _manifest_files(manifest)
+
+    filenames: set[str] = set()
+    download_paths: set[str] = set()
+    required_prefix = bundle_subdir.rstrip("/") + "/"
+    for file_info in manifest["files"]:
+        filename = str(file_info["filename"])
+        download_path = str(file_info["download_path"])
+        if filename in filenames:
+            raise AssetError(f"asset manifest {asset_id} contains duplicate filename {filename!r}")
+        if download_path in download_paths:
+            raise AssetError(f"asset manifest {asset_id} contains duplicate download_path {download_path!r}")
+        if not download_path.startswith(required_prefix):
+            raise AssetError(
+                f"asset manifest {asset_id} download_path {download_path!r} does not start with "
+                f"bundle_subdir {bundle_subdir!r}"
+            )
+        filenames.add(filename)
+        download_paths.add(download_path)
+    return manifest
+
+
 def _load_manifests() -> dict[str, dict[str, Any]]:
     manifests: dict[str, dict[str, Any]] = {}
     for path in _iter_manifest_paths():
@@ -165,12 +225,10 @@ def _load_manifests() -> dict[str, dict[str, Any]]:
         for field in _REQUIRED_TOP_LEVEL_FIELDS:
             if field not in manifest or str(manifest.get(field, "")).strip() == "":
                 raise AssetError(f"asset manifest is missing {field}: {path}")
-        asset_id = _validate_asset_id(str(manifest.get("asset_id", "")).strip())
-        if not asset_id:
-            raise AssetError(f"asset manifest is missing asset_id: {path}")
+        manifest = _validate_manifest_contract(manifest)
+        asset_id = str(manifest["asset_id"])
         if asset_id in manifests:
             raise AssetError(f"duplicate asset_id in manifests: {asset_id}")
-        manifest["files"] = _manifest_files(manifest)
         manifests[asset_id] = manifest
     return manifests
 
@@ -336,6 +394,57 @@ def verify_asset(
     return results
 
 
+def asset_file_report(
+    asset_id: str,
+    *,
+    cache_dir: str | Path | None = None,
+    filenames: Iterable[str] | None = None,
+    strict: bool = False,
+) -> dict[str, Any]:
+    """Return expected and observed cache state for selected asset files."""
+
+    manifest = _get_manifest(asset_id)
+    root = _asset_root(asset_id, cache_dir)
+    files: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for file_info in _select_files(manifest, filenames):
+        filename = str(file_info["filename"])
+        path = _asset_file_path(root, file_info)
+        ok, reason = _verify_file(path, file_info)
+        observed_sha256 = ""
+        observed_byte_size = 0
+        if path.exists():
+            observed_sha256, observed_byte_size = _sha256_and_size(path)
+        if not ok:
+            errors.append(f"{filename}: {reason}")
+        files.append(
+            {
+                "filename": filename,
+                "download_path": str(file_info["download_path"]),
+                "path": str(path),
+                "ok": bool(ok),
+                "reason": reason,
+                "expected_sha256": str(file_info["sha256"]),
+                "expected_byte_size": int(file_info["byte_size"]),
+                "observed_sha256": observed_sha256,
+                "observed_byte_size": int(observed_byte_size),
+            }
+        )
+    if strict and errors:
+        raise AssetError("; ".join(errors))
+    return {
+        "schema_version": str(manifest["schema_version"]),
+        "asset_id": str(manifest["asset_id"]),
+        "asset_type": str(manifest["asset_type"]),
+        "readout": str(manifest["readout"]),
+        "profile": str(manifest["profile"]),
+        "release_status": str(manifest["release_status"]),
+        "bundle": str(manifest["bundle"]),
+        "bundle_subdir": str(manifest["bundle_subdir"]),
+        "files": files,
+    }
+
+
 def download_asset(
     asset_id: str,
     *,
@@ -408,6 +517,7 @@ __all__ = [
     "ASSET_BASE_URL_ENV",
     "ASSET_DIR_ENV",
     "AssetError",
+    "asset_file_report",
     "DEFAULT_ASSET_BASE_URL",
     "ESMC_WEIGHTS_ENV",
     "describe_asset",

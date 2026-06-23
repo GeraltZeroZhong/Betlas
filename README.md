@@ -221,9 +221,10 @@ print(len(list_column_specs()))
 Topology diagnostics can consume an optional prediction table. It should
 contain a join key such as `record_id` or `domain_id`, a `model` column when
 multiple models are present, and probability columns named
-`prob_<fold_label>`. If `--predictions` is omitted, Betlas derives probabilities
-from transparent rule scores. If `--predictions PATH` is provided and the file
-is missing, the command fails.
+`prob_<fold_label>`. If `--predictions` is omitted, Betlas derives
+uncalibrated rule-softmax weights from transparent rule scores and marks the
+source/calibration columns accordingly. If `--predictions PATH` is provided and
+the file is missing, the command fails.
 
 ### Asset Mirror
 
@@ -374,7 +375,11 @@ Aliases are also available:
 | `ablate` | `ablation_preflight.json` | What rows/features entered ablation? | filters, groups, fold preflight, dependency status |
 | `beta-barrel-detection` | detection CSV | Which chains show beta-barrel-like geometry? | result, stage, decision score, gates, layer evidence, reason |
 | `beta-barrel-staves` | staves CSV | What candidate stave count is supported? | strand count, confidence, gate status, layer evidence, score type |
-| `topology-diagnostics` | topology CSV | Which rows show boundary or mixed-topology signals? | ambiguity, continuous topology scores, mixed-topology flags |
+| `topology-diagnostics` | topology CSV | Which rows show boundary or mixed-topology signals? | ambiguity, probability source/calibration status, continuous topology scores, mixed-topology flags |
+
+For readout commands, stdout is progress/status text rather than CSV content.
+Always pass `--out` or the documented `output.csv=...` override when a workflow
+manager or shell redirection expects a CSV file.
 
 Readout column specs are available from Python:
 
@@ -435,7 +440,7 @@ written under ignored run directories such as `runs/...`.
 | `no beta-sheet segments` from `slice` | Selected chain lacks parsed beta-sheet segments. | Confirm chain id and mmCIF `_struct_sheet_range` records. |
 | DSSP not found | `mkdssp` is missing from `PATH`. | Install DSSP and pass `runtime.dssp_bin_path=/path/to/mkdssp` when needed. |
 | Asset download fails with `pending_release` | Default release payload is not available for that manifest. | Set `BETLAS_ASSET_BASE_URL` or `--base-url` to a local mirror. |
-| Prediction file error in topology diagnostics | `--predictions` was provided but the file does not exist. | Provide the CSV or omit `--predictions` to use grammar-derived probabilities. |
+| Prediction file error in topology diagnostics | `--predictions` was provided but the file does not exist or lacks usable probability columns. | Provide the CSV or omit `--predictions` to use uncalibrated rule-softmax weights. |
 | Stave command requires a gate | Broad candidate counting is intentionally not silent. | Pass `--barrel-decisions runs/detection.csv` or explicitly use `--allow-ungated`. |
 
 ## Python API
@@ -500,6 +505,8 @@ Before building a release candidate, verify:
 - Wheel and sdist contents exclude repository companion scripts, run outputs,
   tests, and large asset payloads.
 - Packaged asset manifests are present and large files are not.
+- Complete fixed-cohort reproduction requires a Git tag/source checkout because
+  the PyPI wheel/sdist are intentionally slim package artifacts.
 
 ## Repository Layout
 

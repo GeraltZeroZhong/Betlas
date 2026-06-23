@@ -583,7 +583,10 @@ def chains_command(args: argparse.Namespace) -> None:
     if args.format == "json":
         print(json.dumps({"structure": str(structure), "chains": rows}, indent=2, sort_keys=True))
         return
-    print("auth_chain_id\tlabel_chain_ids\tstandard_ca_residue_count\tsheet_annotation_available\thelix_conf_annotation_available\tworkflow_hints")
+    print(
+        "auth_chain_id\tlabel_chain_ids\tstandard_ca_residue_count\tinsertion_code_ca_count\t"
+        "nonpolymer_atom_rows\tsheet_annotation_available\thelix_conf_annotation_available\tworkflow_hints"
+    )
     for row in rows:
         print(
             "\t".join(
@@ -591,6 +594,8 @@ def chains_command(args: argparse.Namespace) -> None:
                     str(row["auth_chain_id"]),
                     ",".join(str(value) for value in row["label_chain_ids"]),
                     str(row["standard_ca_residue_count"]),
+                    str(row["insertion_code_ca_count"]),
+                    str(row["nonpolymer_atom_rows"]),
                     "yes" if row["sheet_annotation_available"] else "no",
                     "yes" if row["helix_conf_annotation_available"] else "no",
                     ",".join(str(value) for value in row["workflow_hints"]),

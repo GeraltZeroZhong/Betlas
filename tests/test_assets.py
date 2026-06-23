@@ -9,6 +9,7 @@ import pytest
 from betlas import cli
 from betlas.assets import (
     AssetError,
+    asset_file_report,
     describe_asset,
     download_asset,
     list_assets,
@@ -45,6 +46,7 @@ def _write_manifest(
     manifest.write_text(
         "\n".join(
             [
+                "schema_version: betlas.asset-manifest.v1",
                 f"asset_id: {asset_id}",
                 "asset_type: unit_bundle",
                 "readout: beta_barrel_detection",
@@ -88,6 +90,9 @@ def test_asset_download_verify_and_path_use_local_release(tmp_path: Path, monkey
     assert paths == (cache_dir / "unit-asset" / "tiny.txt",)
     assert paths[0].read_bytes() == data
     assert verify_asset("unit-asset", cache_dir=cache_dir) == {"tiny.txt": True}
+    report = asset_file_report("unit-asset", cache_dir=cache_dir, strict=True)
+    assert report["files"][0]["expected_sha256"] == report["files"][0]["observed_sha256"]
+    assert report["files"][0]["expected_byte_size"] == report["files"][0]["observed_byte_size"]
     assert resolve_asset_path("unit-asset", "tiny.txt", cache_dir=cache_dir) == paths[0]
 
 
@@ -233,6 +238,64 @@ def test_asset_manifest_validates_required_file_fields(tmp_path: Path, monkeypat
     monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
 
     with pytest.raises(AssetError, match="missing sha256"):
+        list_assets()
+
+
+def test_asset_manifest_validates_required_contract_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest_root = _write_manifest(
+        tmp_path,
+        asset_id="missing-schema",
+        filename="tiny.txt",
+        data=b"bad",
+    )
+    manifest = next(manifest_root.rglob("manifest.yaml"))
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace("schema_version: betlas.asset-manifest.v1\n", ""),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
+
+    with pytest.raises(AssetError, match="missing schema_version"):
+        list_assets()
+
+
+def test_asset_manifest_rejects_duplicate_files_and_wrong_bundle_prefix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_root = _write_manifest(
+        tmp_path,
+        asset_id="duplicate-file",
+        filename="tiny.txt",
+        data=b"bad",
+    )
+    manifest = next(manifest_root.rglob("manifest.yaml"))
+    text = manifest.read_text(encoding="utf-8")
+    manifest.write_text(
+        text
+        + "\n"
+        + "  - filename: tiny.txt\n"
+        + "    purpose: duplicate\n"
+        + "    byte_size: 3\n"
+        + f"    sha256: {_sha256(b'bad')}\n"
+        + "    download_path: example/official/duplicate.txt\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
+
+    with pytest.raises(AssetError, match="duplicate filename"):
+        list_assets()
+
+    manifest_root = _write_manifest(
+        tmp_path / "prefix",
+        asset_id="wrong-prefix",
+        filename="tiny.txt",
+        data=b"bad",
+        download_path="other/official/tiny.txt",
+    )
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
+
+    with pytest.raises(AssetError, match="does not start with bundle_subdir"):
         list_assets()
 
 

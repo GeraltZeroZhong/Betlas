@@ -172,6 +172,34 @@ def _untracked_public_script_paths() -> set[str]:
     return paths
 
 
+def _ignored_public_script_paths() -> set[str]:
+    result = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--",
+            "scripts/run_full_pipeline.py",
+            "scripts/external_baselines",
+            "scripts/reproducibility",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    allowed_parts = {"__pycache__", ".conda", "downloads", "runs", "tools", ".pytest_cache", ".ruff_cache"}
+    paths: set[str] = set()
+    for rel_path in result.stdout.splitlines():
+        parts = set(Path(rel_path).parts)
+        if parts & allowed_parts:
+            continue
+        paths.add(rel_path)
+    return paths
+
+
 def test_public_docs_and_inventory_use_betlas_public_terms_only() -> None:
     for path in _public_docs():
         _assert_clean_public_text(str(path.relative_to(REPO_ROOT)), path.read_text(encoding="utf-8"))
@@ -188,6 +216,7 @@ def test_all_tracked_public_scripts_are_in_inventory() -> None:
 
 def test_public_script_inventory_matches_git_index() -> None:
     assert _untracked_public_script_paths() == set()
+    assert _ignored_public_script_paths() == set()
     assert _tracked_public_script_paths() == _inventory_paths()
 
 
@@ -206,6 +235,27 @@ def test_public_shell_wrappers_provide_help() -> None:
         assert result.returncode == 0, result.stderr
         assert "Usage:" in result.stdout
         _assert_clean_public_text(rel_path, result.stdout + result.stderr)
+
+
+def test_external_baseline_wrappers_fail_fast_without_required_inputs() -> None:
+    wrappers = [
+        "scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_betaware.sh",
+        "scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_juchmme_pred_tmbb2.sh",
+        "scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_polarbearal.sh",
+        "scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_proftmb.sh",
+        "scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_tmbed.sh",
+    ]
+    for rel_path in wrappers:
+        result = subprocess.run(
+            ["bash", str(REPO_ROOT / rel_path)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert result.stderr.startswith("Error: required arguments:"), rel_path
 
 
 def test_public_cli_scripts_provide_help() -> None:
@@ -255,12 +305,29 @@ def test_public_cli_help_uses_release_surface_terms(capsys) -> None:
         ["readout", "beta-barrel-detection", "--help"],
         ["readout", "beta-barrel-staves", "--help"],
         ["readout", "topology-diagnostics", "--help"],
+        ["readout", "fold-continuous-scores", "--help"],
+        ["readout", "topology-ambiguity", "--help"],
+        ["readout", "mixed-topology", "--help"],
     ]
     for command in help_commands:
         with pytest.raises(SystemExit) as exc:
             cli.main(command)
         assert exc.value.code == 0
         _assert_clean_public_text("betlas " + " ".join(command), capsys.readouterr().out)
+
+
+def test_topology_alias_help_is_mode_specific(capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["readout", "fold-continuous-scores", "--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "continuous fold-organization scores" in out
+    assert "--mode ambiguity" not in out
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["readout", "fold-continuous-scores", "--mode", "ambiguity"])
+    assert exc.value.code == 2
+    assert "fixed topology mode" in capsys.readouterr().err
 
 
 def test_public_cli_user_errors_do_not_print_tracebacks(capsys) -> None:

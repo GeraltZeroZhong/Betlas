@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from betlas.assets import resolve_asset_path  # noqa: E402
+from betlas.assets import asset_file_report, resolve_asset_path  # noqa: E402
 from scripts.reproducibility.readouts.beta_barrel_detection.betlas_readout import (  # noqa: E402
     DEFAULT_BETLAS_BETA_ROOT,
     DEFAULT_ESMC_NPZ,
@@ -26,6 +26,10 @@ from scripts.reproducibility.readouts.beta_barrel_detection.betlas_readout impor
 )
 
 DEFAULT_ASSET_ID = "betlas-beta-barrel-detection-official-v1"
+
+
+def _unique_in_order(values: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(values))
 
 
 def parse_args() -> argparse.Namespace:
@@ -131,8 +135,11 @@ def _main() -> int:
     asset_cache_dir = args.asset_cache_dir.expanduser().resolve() if args.asset_cache_dir else None
     feature_columns = args.feature_columns.expanduser().resolve() if args.feature_columns else None
     esmc_npz = args.esmc_npz.expanduser().resolve() if args.esmc_npz else out_dir / DEFAULT_ESMC_NPZ.name
+    asset_files_used: list[str] = []
+    asset_manifest_verification: dict[str, object] = {}
     if asset_id:
         def asset_path(filename: str) -> Path:
+            asset_files_used.append(filename)
             return resolve_asset_path(
                 asset_id,
                 filename,
@@ -152,6 +159,14 @@ def _main() -> int:
             args.layer_manifest_csv = asset_path("layer_radial16_feature_manifest.csv")
         if args.esmc_npz is None:
             esmc_npz = asset_path("esmc_mean_embeddings_aligned.npz")
+        selected_asset_files = _unique_in_order(asset_files_used)
+        if selected_asset_files:
+            asset_manifest_verification = asset_file_report(
+                asset_id,
+                cache_dir=asset_cache_dir,
+                filenames=selected_asset_files,
+                strict=True,
+            )
     paths = ReadoutPaths(
         betlas_beta_root=args.betlas_beta_root.expanduser().resolve(),
         out_dir=out_dir,
@@ -164,6 +179,7 @@ def _main() -> int:
         layer_manifest_csv=args.layer_manifest_csv.expanduser().resolve() if args.layer_manifest_csv else None,
         asset_id=asset_id or "",
         asset_cache_dir=asset_cache_dir if asset_id else None,
+        asset_manifest_verification=asset_manifest_verification,
     )
     metadata = run_official_detection_readout(
         paths=paths,

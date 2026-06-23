@@ -32,6 +32,12 @@ from betlas.readouts.beta_barrel_staves import (
 from betlas.readouts.beta_barrel_staves.cli import _apply_barrel_decisions, _load_barrel_decisions
 from betlas.readouts.beta_barrel_staves.config import AnalyzerConfig
 from betlas.readouts.beta_barrel_staves.exceptions import DsspNotFoundError
+from betlas.readouts.beta_barrel_staves.io.prepare_cache import (
+    prepare_cache_path as staves_prepare_cache_path,
+)
+from betlas.readouts.beta_barrel_staves.io.prepare_cache import (
+    store_prepare_payloads as store_staves_prepare_payloads,
+)
 from betlas.readouts.beta_barrel_staves.runtime import find_dssp_binary, require_dssp_binary
 from betlas.readouts.topology_diagnostics import (
     compute_topology_diagnostics,
@@ -156,6 +162,13 @@ def test_beta_barrel_detection_reports_dssp_error_before_sheet_prefilter() -> No
     assert "DSSP failed" in row["reason"]
 
 
+def test_beta_barrel_detection_prepare_error_rows_mark_score_not_applicable() -> None:
+    rows = detection_pipeline._prepare_error_rows(["/tmp/missing.cif: parser failed"])
+
+    assert rows[0]["score_type"] == "not_applicable"
+    assert rows[0]["calibration_status"] == "not_applicable"
+
+
 def test_beta_barrel_detection_prepare_cache_preserves_or_skips_dssp_errors(tmp_path: Path) -> None:
     cfg = build_detection_config([])
     cfg.runtime.prepare_cache_enabled = True
@@ -187,6 +200,25 @@ def test_beta_barrel_detection_prepare_cache_preserves_or_skips_dssp_errors(tmp_
 
     store_prepare_payloads(str(structure), cfg, [payload])
     assert not prepare_cache_path(str(structure), cfg).exists()
+
+
+def test_beta_barrel_staves_prepare_cache_skips_dssp_errors(tmp_path: Path) -> None:
+    cfg = build_config()
+    cfg.runtime.prepare_cache_enabled = True
+    cfg.runtime.prepare_cache_dir = str(tmp_path / "cache")
+    structure = tmp_path / "failed.cif"
+    structure.write_text("data_failed\n", encoding="utf-8")
+    payload = {
+        "filename": "failed.cif",
+        "source_path": str(structure),
+        "chain": "A",
+        "dssp_error": "DSSP failed",
+        "residues_data": [{"coord": (0.0, 0.0, 0.0), "is_sheet": False}],
+    }
+
+    store_staves_prepare_payloads(str(structure), cfg, [payload])
+
+    assert not staves_prepare_cache_path(str(structure), cfg).exists()
 
 
 def test_beta_barrel_staves_readout_counts_persistent_ring():
@@ -670,6 +702,7 @@ def test_topology_diagnostics_errors_when_explicit_predictions_do_not_match(tmp_
                 "record_id": "other",
                 "prob_beta_sandwich": 1.0,
                 "prob_beta_barrel": 0.0,
+                "pred_probability": 1.0,
             }
         ]
     ).to_csv(predictions, index=False)
@@ -682,6 +715,29 @@ def test_topology_diagnostics_errors_when_explicit_predictions_do_not_match(tmp_
             write_manifest=False,
             predictions_required=True,
         )
+
+
+def test_topology_diagnostics_errors_when_explicit_predictions_lack_probability_signal(tmp_path: Path) -> None:
+    features = tmp_path / "features.csv"
+    predictions = tmp_path / "predictions.csv"
+    pd.DataFrame([_topology_row("sandC", "beta_sandwich")]).to_csv(features, index=False)
+    pd.DataFrame([{"record_id": "sandC", "model": "hist_gradient_boosting"}]).to_csv(predictions, index=False)
+
+    with pytest.raises(ValueError, match="lacks usable probability"):
+        run_topology_diagnostics(
+            features_csv=features,
+            predictions_csv=predictions,
+            out_csv=tmp_path / "topology.csv",
+            write_manifest=False,
+            predictions_required=True,
+        )
+
+
+def test_topology_diagnostics_marks_rule_softmax_as_uncalibrated() -> None:
+    diagnostics = compute_topology_diagnostics(pd.DataFrame([_topology_row("sandC", "beta_sandwich")]))
+
+    assert diagnostics.loc[0, "betlas_probability_source"] == "rule_softmax"
+    assert diagnostics.loc[0, "betlas_probability_calibration_status"] == "uncalibrated_rule_softmax"
 
 
 def test_topology_diagnostics_parse_failed_rows_are_status_only() -> None:

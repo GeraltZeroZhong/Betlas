@@ -48,6 +48,9 @@ PYTHONPATH=.:src python scripts/reproducibility/readout_benchmarks/beta_barrel_s
 After the assets are already cached:
 
 ```bash
+betlas assets verify betlas-beta-barrel-detection-official-v1 --cache-dir runs/assets --strict
+betlas assets verify betlas-beta-barrel-staves-official-v1 --cache-dir runs/assets --strict
+
 PYTHONPATH=.:src python scripts/reproducibility/readout_benchmarks/beta_barrel_detection/run_betlas151_layer_radial16_official.py \
   --asset-id betlas-beta-barrel-detection-official-v1 \
   --asset-cache-dir runs/assets \
@@ -58,6 +61,10 @@ PYTHONPATH=.:src python scripts/reproducibility/readout_benchmarks/beta_barrel_s
   --asset-cache-dir runs/assets \
   --out-dir runs/readouts/beta_barrel_staves_official
 ```
+
+The runners also verify the manifest hash and byte-size contract for every
+cached file they read, then record expected and observed file state in
+`metadata.json`.
 
 External comparison adapters live under `scripts/external_baselines/`; Betlas
 core readouts can be invoked directly with `betlas readout ...`.

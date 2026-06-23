@@ -288,6 +288,7 @@ def main(argv: list[str] | None = None) -> None:
             "  betlas readout beta-barrel-staves input.path=structures/ output.csv=runs/staves.csv runtime.dssp_bin_path=mkdssp --allow-ungated\n"
             "  betlas readout beta-barrel-staves --check-env\n\n"
             "Output CSV: one row per analyzed chain with candidate stave count, heuristic confidence, slice, geometry, and runtime-status columns.\n"
+            "Stdout is progress/status text, not CSV; pass --out or output.csv=... for a CSV path. Default CSV: beta_barrel_staves_results.csv.\n"
             "Biological gate: pass --barrel-decisions from beta-barrel-detection, or pass --allow-ungated for explicit exploratory ungated counting.\n"
             "DSSP: pass runtime.dssp_bin_path=/path/to/mkdssp or use --check-env to verify availability.\n"
             "Hydra overrides: KEY=VALUE tokens are forwarded after CLI flags and can set nested config values."
@@ -319,7 +320,7 @@ def main(argv: list[str] | None = None) -> None:
         "--out",
         "-o",
         default=None,
-        help="Write results CSV to this path.",
+        help="Write results CSV to this path. Stdout is status text, not CSV.",
     )
     parser.add_argument(
         "--chain",

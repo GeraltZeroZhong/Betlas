@@ -27,23 +27,31 @@ def _beta_barrel_detection_main(argv: list[str] | None = None) -> None:
     main(argv)
 
 
-def _topology_diagnostics_main(argv: list[str] | None = None, *, prog: str = "betlas readout topology-diagnostics") -> None:
+def _topology_diagnostics_main(
+    argv: list[str] | None = None,
+    *,
+    prog: str = "betlas readout topology-diagnostics",
+    fixed_mode: str | None = None,
+) -> None:
     from .topology_diagnostics.cli import main
 
-    main(argv, prog=prog)
+    main(argv, prog=prog, fixed_mode=fixed_mode)
 
 
 def _mode_main(mode: str) -> Callable[[list[str] | None], None]:
     def run(argv: list[str] | None = None) -> None:
         args = list(argv or [])
-        if not any(arg == "--mode" or arg.startswith("--mode=") for arg in args):
-            args = ["--mode", mode, *args]
         alias = {
             "ambiguity": "topology-ambiguity",
             "continuous": "fold-continuous-scores",
             "mixed": "mixed-topology",
         }.get(mode, "topology-diagnostics")
-        _topology_diagnostics_main(args, prog=f"betlas readout {alias}")
+        if any(arg == "--mode" or arg.startswith("--mode=") for arg in args):
+            raise ValueError(
+                f"{alias} has a fixed topology mode; use topology-diagnostics --mode ... "
+                "to choose a different topology diagnostics subset"
+            )
+        _topology_diagnostics_main(args, prog=f"betlas readout {alias}", fixed_mode=mode)
 
     return run
 

@@ -318,6 +318,8 @@ def test_chains_cli_inspects_author_and_label_chains(
     cli.main(["chains", str(structure)])
     out = capsys.readouterr().out
     assert "auth_chain_id" in out
+    assert "insertion_code_ca_count" in out
+    assert "nonpolymer_atom_rows" in out
     assert "feature_extraction_supported" in out
 
     cli.main(["structure", "inspect", str(structure), "--format", "json"])

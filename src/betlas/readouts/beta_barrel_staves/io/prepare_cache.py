@@ -156,6 +156,8 @@ def load_prepare_payloads(file_path: str, cfg: AppConfig) -> list[dict[str, obje
 def store_prepare_payloads(file_path: str, cfg: AppConfig, payloads: list[dict[str, object]]) -> None:
     if not cfg.runtime.prepare_cache_enabled:
         return
+    if any(str(payload.get("dssp_error", "") or "").strip() for payload in payloads):
+        return
 
     cache_path = prepare_cache_path(file_path, cfg)
     cache_key = build_prepare_cache_key(file_path, cfg)

@@ -74,6 +74,7 @@ class ReadoutPaths:
     layer_manifest_csv: Path | None = None
     asset_id: str = ""
     asset_cache_dir: Path | None = None
+    asset_manifest_verification: dict[str, Any] | None = None
 
     @property
     def positive_manifest(self) -> Path:
@@ -1023,6 +1024,7 @@ def run_official_detection_readout(
         "source_root": source_root,
         "asset_id": paths.asset_id,
         "asset_cache_dir": display_path(paths.asset_cache_dir) if paths.asset_cache_dir is not None else "",
+        "asset_manifest_verification": paths.asset_manifest_verification or {},
         "cohort_csv": display_path(paths.cohort_csv) if paths.cohort_csv else "",
         "layer_radial_chain_results": (
             display_path(paths.layer_radial_chain_results)

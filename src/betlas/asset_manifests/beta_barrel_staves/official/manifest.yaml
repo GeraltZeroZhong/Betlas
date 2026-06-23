@@ -1,3 +1,4 @@
+schema_version: betlas.asset-manifest.v1
 asset_id: betlas-beta-barrel-staves-official-v1
 asset_type: official_readout_bundle
 readout: beta_barrel_staves

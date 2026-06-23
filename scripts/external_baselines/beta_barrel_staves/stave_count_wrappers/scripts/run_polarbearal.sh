@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: run_polarbearal.sh [input.pdb] [output_dir]
+Usage: run_polarbearal.sh input.pdb output_dir
 
 Build if needed and run the PolarBearal3 command-line shim on one structure.
 Environment: DOTNET_BIN, DOTNET_ROOT, POLARBEARAL_REBUILD,
@@ -16,6 +16,11 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
+if [[ $# -ne 2 ]]; then
+  echo "Error: required arguments: input.pdb output_dir" >&2
+  exit 2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOL="$ROOT/tools/PolarBearal3"
 MONO_ENV="$ROOT/.conda/polarbearal"
@@ -23,24 +28,29 @@ DOTNET_BIN="${DOTNET_BIN:-$MONO_ENV/lib/dotnet/dotnet}"
 BUILD_DIR="$ROOT/runs/polarbearal3_build"
 DLL="$BUILD_DIR/PolarBearal3Cli.dll"
 
-INPUT="${1:-$ROOT/runs/polarbearal_input/1A0S.pdb}"
-OUT_DIR="${2:-$ROOT/runs/polarbearal_smoke}"
-STDOUT_PATH="${POLARBEARAL_STDOUT:-$ROOT/runs/polarbearal_smoke.stdout}"
-STDERR_PATH="${POLARBEARAL_STDERR:-$ROOT/runs/polarbearal_smoke.stderr}"
+INPUT="$1"
+OUT_DIR="$2"
+STDOUT_PATH="${POLARBEARAL_STDOUT:-$OUT_DIR/polarbearal.stdout}"
+STDERR_PATH="${POLARBEARAL_STDERR:-$OUT_DIR/polarbearal.stderr}"
+
+if [[ ! -s "$INPUT" ]]; then
+  echo "Error: input PDB does not exist or is empty: $INPUT" >&2
+  exit 2
+fi
+if [[ ! -f "$TOOL/Program.cs" ]]; then
+  echo "Error: PolarBearal3 source tree is missing under $TOOL; run fetch_external_tools.sh first" >&2
+  exit 2
+fi
 
 if [[ ! -x "$DOTNET_BIN" ]]; then
   DOTNET_BIN="$(command -v dotnet || true)"
 fi
 if [[ -z "$DOTNET_BIN" ]]; then
-  echo ".NET SDK 6 is required. Run scripts/setup_envs.sh first." >&2
-  exit 1
+  echo "Error: .NET SDK 6 is required. Run scripts/setup_envs.sh first." >&2
+  exit 2
 fi
 
-mkdir -p "$BUILD_DIR" "$(dirname "$INPUT")" "$OUT_DIR"
-
-if [[ ! -s "$INPUT" ]]; then
-  curl -L --fail https://files.rcsb.org/download/1A0S.pdb -o "$INPUT"
-fi
+mkdir -p "$BUILD_DIR" "$OUT_DIR"
 
 # The current upstream PolarBearal3 main branch is missing a break in one menu
 # case, which prevents `dotnet build` from compiling. This is a compile-only
