@@ -343,6 +343,7 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
     decision_cfg = cfg.analyzer.decision
     default_decision_basis = "adjusted" if decision_cfg.use_adjusted_score else "raw"
     chain_residue_count = len(residues_data)
+    dssp_error = str(payload.get("dssp_error", "") or "")
     sheet_residue_coords = [
         residue["coord"] for residue in residues_data if residue.get("is_sheet", False)
     ]
@@ -390,6 +391,9 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
             "chain": chain_id,
             "result": result,
             "result_stage": result_stage,
+            "score_type": "heuristic",
+            "calibration_status": "uncalibrated",
+            "config_profile": "native",
             "decision_score": decision_score,
             "decision_basis": decision_basis,
             "decision_threshold": float(
@@ -412,7 +416,7 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
             "decision_gate": str(report.get("decision_gate", "")),
             "rescue_type": str(report.get("rescue_type", "")),
             "guard_blocked": bool(report.get("guard_blocked", False)),
-            # Keep the legacy names for downstream notebooks and older CSV consumers.
+            # Keep compatibility column names for older CSV consumers.
             "all_adjusted_layers": scored_layers,
             "all_layers": total_layers,
         }
@@ -426,6 +430,13 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
                 min_chain_residues,
             ),
             result_stage="prefilter",
+        )
+
+    if dssp_error:
+        return build_row(
+            RESULT_ERROR,
+            f"DSSP failed before beta-sheet assignment: {dssp_error}",
+            result_stage="dssp",
         )
 
     all_coordinates = np.array([residue["coord"] for residue in residues_data], dtype=float)
@@ -694,7 +705,7 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
 
     report.update(
         {
-            "decision_score": final_score,
+            "decision_score": final_score if is_barrel else 0.0,
             "decision_basis": default_decision_basis,
             "decision_threshold": float(decision_cfg.barrel_valid_ratio),
             "valid_layer_frac": (int(report.get("valid_layers", 0)) / total_layers)
@@ -760,22 +771,37 @@ def prepare_one_file(file_path: str, cfg: AppConfig) -> list[dict[str, object]] 
         return PrepareFailure(f"{source_path}: {exc}")
 
     payloads: list[dict[str, object]] = []
+    requested_chain = str(getattr(cfg.input, "chain_id", "") or "").strip()
+    seen_chains: list[str] = []
     for chain in loader.model:
         chain_id = chain.id
         try:
             residues_data = loader.get_chain_data(chain_id)
         except Exception as exc:
             return PrepareFailure(f"{source_path}: {exc}")
+        effective_chain_id = str(chain_id)
+        if residues_data:
+            effective_chain_id = str(residues_data[0].get("chain", chain_id))
+        seen_chains.append(effective_chain_id)
+        if requested_chain and requested_chain not in {str(chain_id), effective_chain_id}:
+            continue
 
         payloads.append(
             {
                 "filename": filename,
                 "source_path": source_path,
-                "chain": chain_id,
+                "chain": effective_chain_id,
+                "dssp_status": "error" if loader.secondary_structure_error else "ok",
+                "dssp_error": loader.secondary_structure_error or "",
                 "residues_data": residues_data,
             }
         )
 
+    if requested_chain and not payloads:
+        available = ", ".join(seen_chains) if seen_chains else "<none>"
+        return PrepareFailure(
+            f"{source_path}: chain {requested_chain!r} was not found; available chains: {available}"
+        )
     store_prepare_payloads(file_path, cfg, payloads)
     return payloads
 

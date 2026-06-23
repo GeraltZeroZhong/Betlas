@@ -4,7 +4,8 @@ from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 
-from ..config import AppConfig, build_config, sync_legacy_config, validate_config
+from ..bootstrap import configure_thread_environment
+from ..config import AppConfig, build_config, sync_compat_config, validate_config
 from ..exceptions import InputValidationError
 from ..io.metadata import build_run_metadata, default_metadata_path, write_run_metadata
 from ..io.results import print_results_summary, write_results_csv
@@ -92,6 +93,7 @@ def apply_runtime_overrides(
     cfg: AppConfig,
     *,
     input_path: str | None = None,
+    chain_id: str | None = None,
     workers: int | None = None,
     prepare_workers: int | None = None,
     out_csv: str | None = None,
@@ -99,13 +101,15 @@ def apply_runtime_overrides(
     updated = deepcopy(cfg)
     if input_path is not None:
         updated.input.path = str(input_path)
+    if chain_id is not None:
+        updated.input.chain_id = str(chain_id)
     if workers is not None:
         updated.runtime.workers = int(workers)
     if prepare_workers is not None:
         updated.runtime.prepare_workers = int(prepare_workers)
     if out_csv is not None:
         updated.output.csv_path = str(out_csv)
-    sync_legacy_config(updated)
+    sync_compat_config(updated)
     return updated
 
 
@@ -190,16 +194,30 @@ def _sort_and_sanitize_result_rows(
     ]
 
 
+def _failure_reason_summary(rows: list[dict[str, object]], *, limit: int = 3) -> str:
+    reasons = [str(row.get("reason", "")).strip() for row in rows if str(row.get("reason", "")).strip()]
+    if not reasons:
+        return ""
+    shown = "; ".join(reasons[:limit])
+    more = f"; plus {len(reasons) - limit} more failure(s)" if len(reasons) > limit else ""
+    return f" Reasons: {shown}{more}"
+
+
 def _prepare_error_rows(errors: list[str]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for error in errors:
-        filename, _, detail = error.partition(":")
+        source_path, _, detail = error.partition(":")
+        filename = Path(source_path.strip()).name if source_path.strip() else ""
         rows.append(
             {
-                "filename": filename.strip(),
+                "filename": filename,
+                "source_path": source_path.strip(),
                 "chain": "",
                 "result": "ERROR",
                 "result_stage": "prepare",
+                "score_type": "not_applicable",
+                "calibration_status": "not_applicable",
+                "config_profile": "native",
                 "reason": detail.strip() or error,
             }
         )
@@ -236,6 +254,7 @@ def run_pipeline_result(
     raise_on_all_prepare_failures: bool = False,
 ) -> PipelineRunResult:
     """Run the full beta-strand stave counting pipeline and return structured results."""
+    configure_thread_environment()
     cfg = deepcopy(cfg)
     validate_config(cfg)
 
@@ -257,7 +276,7 @@ def run_pipeline_result(
         return PipelineRunResult.from_rows([], input_files=files, output_path=output_path, config=cfg)
 
     cfg.runtime.dssp_bin_path = require_dssp_binary(cfg.runtime.dssp_bin_path)
-    sync_legacy_config(cfg)
+    sync_compat_config(cfg)
 
     analysis_workers = resolve_analysis_worker_count(cfg.runtime.workers, cfg.runtime.cpu_reserve)
     prepare_workers = resolve_prepare_worker_count(cfg.runtime.prepare_workers, analysis_workers)
@@ -320,6 +339,7 @@ def run_pipeline_result(
         if raise_on_all_prepare_failures:
             raise InputValidationError(
                 f"All {len(files)} input file(s) failed during preparation."
+                f"{_failure_reason_summary(all_results)}"
             )
         return run_result
 
@@ -366,12 +386,18 @@ def count_strands(
     print_summary: bool = False,
     show_progress: bool | None = None,
     strict_input: bool = True,
+    allow_ungated: bool = False,
 ) -> PipelineRunResult:
     """
     Public Python API for counting beta-strand staves with structured results.
 
     CSV output is written only when ``output`` is provided or ``write_csv=True``.
     """
+    if not allow_ungated:
+        raise ValueError(
+            "count_strands requires explicit allow_ungated=True. For biologically gated "
+            "counting, use count_beta_barrel_staves(..., barrel_decisions=...)."
+        )
     if config is not None and cfg is not None:
         raise TypeError("Pass only one of `config` or `cfg`.")
     if overrides is not None and (config is not None or cfg is not None):
@@ -412,6 +438,7 @@ def detect(
     print_summary: bool = False,
     show_progress: bool | None = None,
     strict_input: bool = True,
+    allow_ungated: bool = False,
 ) -> PipelineRunResult:
     """Compatibility alias for :func:`count_strands`."""
     return count_strands(
@@ -426,6 +453,7 @@ def detect(
         print_summary=print_summary,
         show_progress=show_progress,
         strict_input=strict_input,
+        allow_ungated=allow_ungated,
     )
 
 
@@ -437,10 +465,16 @@ def main(
     out_csv: str | None = None,
     cfg: AppConfig | None = None,
     overrides: dict[str, object] | list[str] | None = None,
+    allow_ungated: bool = False,
 ) -> list[dict[str, object]]:
     """
     Backward-compatible entry point with optional Hydra overrides.
     """
+    if not allow_ungated:
+        raise ValueError(
+            "beta-barrel-staves pipeline.main requires explicit allow_ungated=True. "
+            "For biologically gated counting, use count_beta_barrel_staves(..., barrel_decisions=...)."
+        )
     if cfg is not None and overrides is not None:
         raise TypeError("Pass `overrides` only when Betlas beta-barrel-staves readout builds the config for you.")
     resolved_cfg = cfg or build_config(overrides)

@@ -1,20 +1,19 @@
 include README.md
+include LICENSE
 include pyproject.toml
-include environment.yml
-recursive-include configs *.yaml
-recursive-include reproducibility *.txt *.yml
-include scripts/__init__.py
-include scripts/run_full_pipeline.py
-recursive-include scripts/external_baselines *
-recursive-include tests *.py
+
+prune assets
+prune configs
+prune data
+prune dist
+prune docs
+prune examples
+prune figures
+prune manuscript
+prune reproducibility
+prune runs
+prune scripts
+prune tests
+
 global-exclude __pycache__/*
 global-exclude *.py[cod]
-prune data
-prune manuscript
-prune figures
-prune runs
-prune docs
-prune scripts/publication
-prune scripts/readouts
-prune scripts/reproducibility/readout_benchmarks
-prune scripts/archive

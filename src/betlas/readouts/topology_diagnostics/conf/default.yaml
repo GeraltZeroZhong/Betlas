@@ -2,12 +2,12 @@ schema: betlas.topology-diagnostics-config.v1
 
 io:
   features_csv: data/processed/betlas_full_features.csv
-  predictions_csv: runs/betlas_full_benchmark/oof_predictions.csv
+  predictions_csv: null
   output_csv: runs/readouts/topology_diagnostics_full/topology_diagnostics.csv
   manifest_path: runs/readouts/topology_diagnostics_full/topology_diagnostics.manifest.json
 
 probability:
-  model: xgboost_tuned
+  model: hist_gradient_boosting
   rule_softmax_temperature: 1.0
   unavailable_margin_low_confidence_range: [0.55, 0.90]
   top2_margin_ambiguity_range: [0.03, 0.32]

@@ -1,12 +1,13 @@
 schema: betlas.benchmark-config.latest
+features:
+  set: raw_geometry
 models:
+  allow_model_skip: false
   include:
-    - grammar_rules
     - logistic_l2
     - random_forest
     - extra_trees
     - hist_gradient_boosting
-    - xgboost_tuned
 logistic_l2:
   C: 1.0
   max_iter: 2000

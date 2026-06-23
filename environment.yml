@@ -14,5 +14,6 @@ dependencies:
   - opencv
   - dssp
   - xgboost
+  - catboost
   - pytest
   - ruff

@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: setup_envs.sh
+
+Create local method-specific environments for stave-count external baseline
+wrappers. Requires mamba or a compatible executable passed through MAMBA.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAMBA="${MAMBA:-mamba}"
 

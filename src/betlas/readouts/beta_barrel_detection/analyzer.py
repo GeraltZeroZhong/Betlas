@@ -13,7 +13,7 @@ from .analysis_utils import (
 from .config import AnalyzerConfig
 from .ellipse import fit_rotated_ellipse
 
-LEGACY_ANALYZER_OVERRIDE_PATHS = {
+COMPAT_ANALYZER_OVERRIDE_PATHS = {
     "min_points": ("fit", "min_points_per_slice"),
     "max_rmse": ("fit", "max_rmse"),
     "min_axis": ("fit", "min_axis"),
@@ -52,17 +52,17 @@ class BarrelAnalyzer:
     Analyze slice intersections with ellipse fitting plus geometric consistency rules.
     """
 
-    def __init__(self, config: AnalyzerConfig | None = None, **legacy_overrides):
+    def __init__(self, config: AnalyzerConfig | None = None, **compat_overrides):
         self.config = deepcopy(config or AnalyzerConfig())
-        self._apply_legacy_overrides(legacy_overrides)
+        self._apply_compat_overrides(compat_overrides)
 
-    def _apply_legacy_overrides(self, overrides: dict[str, object]) -> None:
+    def _apply_compat_overrides(self, overrides: dict[str, object]) -> None:
         for override_name, override_value in overrides.items():
-            if override_name not in LEGACY_ANALYZER_OVERRIDE_PATHS:
+            if override_name not in COMPAT_ANALYZER_OVERRIDE_PATHS:
                 raise TypeError(f"Unknown analyzer override: {override_name}")
 
             target = self.config
-            path = LEGACY_ANALYZER_OVERRIDE_PATHS[override_name]
+            path = COMPAT_ANALYZER_OVERRIDE_PATHS[override_name]
             for part in path[:-1]:
                 target = getattr(target, part)
             setattr(target, path[-1], override_value)

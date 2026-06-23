@@ -4,16 +4,20 @@ from copy import deepcopy
 from pathlib import Path
 
 from .bootstrap import configure_thread_environment
-from .config import AppConfig, build_config, sync_legacy_config, validate_config
+from .config import AppConfig, build_config, sync_compat_config, validate_config
 from .exceptions import InputValidationError
 from .models import PipelineRunResult
-
-configure_thread_environment()
-
 from .pipeline_workers import iter_prepared_payload_batches, run_analysis_stream  # noqa: E402
 from .provenance import write_run_manifest  # noqa: E402
 from .results import ResultCsvWriter, print_results_summary, write_results_csv  # noqa: E402
 from .runtime import require_dssp_binary  # noqa: E402
+
+
+def _has_allowed_suffix(path: Path, allowed_suffixes: tuple[str, ...]) -> bool:
+    if not allowed_suffixes:
+        return True
+    filename = path.name.lower()
+    return any(filename.endswith(suffix) for suffix in allowed_suffixes)
 
 
 def discover_input_files(
@@ -36,14 +40,14 @@ def discover_input_files(
         files = sorted(
             file_path
             for file_path in path.rglob("*")
-            if file_path.is_file() and file_path.suffix.lower() in normalized_suffixes
+            if file_path.is_file() and _has_allowed_suffix(file_path, normalized_suffixes)
         )
         if strict and not files:
             allowed = ", ".join(allowed_suffixes)
             raise InputValidationError(f"No structure files ({allowed}) were found in: {path}")
         return [str(file_path) for file_path in sorted(files)]
 
-    if strict and normalized_suffixes and path.suffix.lower() not in normalized_suffixes:
+    if strict and normalized_suffixes and not _has_allowed_suffix(path, normalized_suffixes):
         allowed = ", ".join(allowed_suffixes)
         raise InputValidationError(
             f"Input file has unsupported suffix {path.suffix!r}. Expected one of: {allowed}."
@@ -79,6 +83,7 @@ def apply_runtime_overrides(
     cfg: AppConfig,
     *,
     input_path: str | None = None,
+    chain_id: str | None = None,
     workers: int | None = None,
     prepare_workers: int | None = None,
     out_csv: str | None = None,
@@ -86,13 +91,15 @@ def apply_runtime_overrides(
     updated = deepcopy(cfg)
     if input_path is not None:
         updated.input.path = str(input_path)
+    if chain_id is not None:
+        updated.input.chain_id = str(chain_id)
     if workers is not None:
         updated.runtime.workers = int(workers)
     if prepare_workers is not None:
         updated.runtime.prepare_workers = int(prepare_workers)
     if out_csv is not None:
         updated.output.csv_path = str(out_csv)
-    sync_legacy_config(updated)
+    sync_compat_config(updated)
     return updated
 
 
@@ -109,6 +116,8 @@ def _prepare_error_rows(errors: list[str]) -> list[dict[str, object]]:
                 "result": "ERROR",
                 "result_stage": "prepare",
                 "reason": detail.strip() or error,
+                "score_type": "not_applicable",
+                "calibration_status": "not_applicable",
             }
         )
     return rows
@@ -141,6 +150,15 @@ def _ordered_result_rows(
     return sorted(rows, key=sort_key)
 
 
+def _failure_reason_summary(rows: list[dict[str, object]], *, limit: int = 3) -> str:
+    reasons = [str(row.get("reason", "")).strip() for row in rows if str(row.get("reason", "")).strip()]
+    if not reasons:
+        return ""
+    shown = "; ".join(reasons[:limit])
+    more = f"; plus {len(reasons) - limit} more failure(s)" if len(reasons) > limit else ""
+    return f" Reasons: {shown}{more}"
+
+
 def run_pipeline_result(
     cfg: AppConfig,
     *,
@@ -167,7 +185,7 @@ def run_pipeline_result(
         return PipelineRunResult.from_rows([], input_files=files, output_path=output_path, config=cfg)
 
     cfg.runtime.dssp_bin_path = require_dssp_binary(cfg.runtime.dssp_bin_path)
-    sync_legacy_config(cfg)
+    sync_compat_config(cfg)
 
     analysis_workers = resolve_analysis_worker_count(cfg.runtime.workers, cfg.runtime.cpu_reserve)
     prepare_workers = resolve_prepare_worker_count(cfg.runtime.prepare_workers, analysis_workers)
@@ -217,6 +235,7 @@ def run_pipeline_result(
             write_run_manifest(config=cfg, input_files=files, output_path=cfg.output.csv_path)
         raise InputValidationError(
             f"All {len(files)} input file(s) failed during preparation."
+            f"{_failure_reason_summary(all_results)}"
         )
 
     if not all_results:

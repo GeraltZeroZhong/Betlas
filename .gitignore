@@ -18,6 +18,8 @@ env/
 
 # Internal generated runs and temporary work
 runs/
+outputs/
+eval_outputs/
 **/tmp/
 **/cache/
 **/caches/
@@ -49,6 +51,11 @@ data/source_snapshot*.json
 docs/
 scripts/archive/
 scripts/archive*/
+scripts/internal/
+scripts/**/.conda/
+scripts/**/downloads/
+scripts/**/runs/
+scripts/**/tools/
 scripts/external_baselines/**/.conda/
 scripts/external_baselines/**/downloads/
 scripts/external_baselines/**/runs/
@@ -69,10 +76,11 @@ manuscript/
 figures/
 data/
 
-# Excluded manuscript/build and long-run operation scripts
-scripts/publication/
-scripts/readouts/
-scripts/reproducibility/readout_benchmarks/
-scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/baseline_reproducibility.md
-scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/smoke_results.md
-tests/test_bfvd_blastp_swissprot.py
+# Public asset manifests are tracked; heavy release payloads are external.
+assets/**/files/
+assets/**/*.npz
+assets/**/*.pkl
+assets/**/*.pt
+assets/**/*.ckpt
+assets/**/*.h5
+assets/**/*.hdf5

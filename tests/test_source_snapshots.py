@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import gzip
-import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from betlas.io.rcsb import mmcif_path_for, validate_pdb_id
 from betlas.io.snapshots import (
     cath_source_snapshot,
     enrich_feature_table_with_mmcif_provenance,
     mmcif_source_snapshot,
 )
-from betlas.readouts.beta_barrel_staves.schema import validate_beta_barrel_staves_dataset
-from betlas.science_report import repair_feature_table_metadata
 
 
 def _write_gzip(path: Path, text: str) -> None:
@@ -58,82 +57,24 @@ def test_enrich_feature_table_adds_row_level_mmcif_hash(tmp_path: Path) -> None:
     assert len(str(df.loc[0, "source_mmcif_sha256"])) == 64
 
 
-def test_beta_barrel_staves_dataset_validation_reports_missing_manifest(tmp_path: Path) -> None:
-    schema = tmp_path / "schema.json"
-    schema.write_text(
-        json.dumps(
-            {
-                "required": [
-                    "record_id",
-                    "pdb_id",
-                    "auth_chain_id",
-                    "evidence_level",
-                    "confidence_score",
-                    "strand_count_final",
-                    "strand_count_beta_barrel_staves",
-                    "qc_status",
-                    "audit_manifest",
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    rows = tmp_path / "rows.csv"
-    pd.DataFrame(
-        [
-            {
-                "record_id": "1abc_A",
-                "pdb_id": "1abc",
-                "auth_chain_id": "A",
-                "evidence_level": "gold",
-                "confidence_score": 1.0,
-                "strand_count_final": 8,
-                "strand_count_beta_barrel_staves": 8,
-                "qc_status": "pass",
-                "audit_manifest": "data/audit/missing.json",
-                "raw_structure_sha256": "not-a-sha",
-            }
-        ]
-    ).to_csv(rows, index=False)
+def test_mmcif_path_rejects_pdb_id_path_traversal(tmp_path: Path) -> None:
+    assert validate_pdb_id("1ABC") == "1abc"
+    assert mmcif_path_for("1abc", tmp_path) == tmp_path / "1abc.cif.gz"
 
-    report = validate_beta_barrel_staves_dataset(rows, schema_path=schema, repo_root=tmp_path)
-
-    assert report["row_count"] == 1
-    assert report["severity_counts"]["warning"] == 1
-    assert report["severity_counts"]["error"] == 1
+    for bad in ["../../outside/evil", "/abs", "1abc/evil", "abc", "abcde"]:
+        with pytest.raises(ValueError, match="invalid pdb_id"):
+            mmcif_path_for(bad, tmp_path)
 
 
-def test_repair_feature_table_preserves_cath_code_strings(tmp_path: Path) -> None:
+def test_snapshot_inputs_reject_unsafe_pdb_ids(tmp_path: Path) -> None:
     labels = tmp_path / "labels.csv"
+    pd.DataFrame([{"pdb_id": "../../outside"}]).to_csv(labels, index=False)
+
+    with pytest.raises(ValueError, match="invalid pdb_id"):
+        mmcif_source_snapshot(tmp_path / "mmcif", labels_csv=labels)
+
     features = tmp_path / "features.csv"
     out = tmp_path / "features_out.csv"
-    pd.DataFrame(
-        [
-            {
-                "record_id": "1abcA00",
-                "pdb_id": "1abc",
-                "cath_architecture_code": "2.40",
-                "cath_topology_code": "2.40.10",
-                "cath_homology_code": "2.40.10.10",
-                "fold_label_final": "beta_barrel",
-            }
-        ]
-    ).to_csv(labels, index=False)
-    pd.DataFrame(
-        [
-            {
-                "record_id": "1abcA00",
-                "pdb_id": "1abc",
-                "cath_architecture_code": "2.4",
-                "cath_topology_code": "2.40.10",
-                "cath_homology_code": "2.40.10.10",
-                "fold_label_final": "beta_barrel",
-                "cz_sheet_size_entropy": "-0.000000001",
-            }
-        ]
-    ).to_csv(features, index=False)
-
-    repaired = repair_feature_table_metadata(features, labels, out)
-
-    assert repaired.loc[0, "cath_architecture_code"] == "2.40"
-    assert repaired.loc[0, "cz_sheet_size_entropy"] == "0.0"
+    pd.DataFrame([{"record_id": "r1", "pdb_id": "../../outside"}]).to_csv(features, index=False)
+    with pytest.raises(ValueError, match="invalid pdb_id"):
+        enrich_feature_table_with_mmcif_provenance(features, out, mmcif_dir=tmp_path / "mmcif")

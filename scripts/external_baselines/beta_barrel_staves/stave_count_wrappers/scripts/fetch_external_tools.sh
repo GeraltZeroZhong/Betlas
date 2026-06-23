@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: fetch_external_tools.sh
+
+Fetch pinned external-method repositories and release files used by the
+stave-count baseline wrappers. Outputs are written under the local tools/
+directory next to this script collection. This command requires git, curl,
+sha256sum, apt-get, and network access.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLS="$ROOT/tools"
 mkdir -p "$TOOLS"

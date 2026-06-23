@@ -15,13 +15,20 @@ def count_beta_barrel_staves(
     path: str | Path,
     *,
     output: str | Path | None = None,
+    barrel_decisions: str | Path | None = None,
+    allow_ungated: bool = False,
     workers: int | None = None,
     prepare_workers: int | None = None,
     overrides: Mapping[str, Any] | list[str] | None = None,
-    write_csv: bool = True,
-    print_summary: bool = True,
+    write_csv: bool | None = None,
+    print_summary: bool = False,
 ) -> PipelineRunResult:
     """Run the Betlas beta-barrel stave-count readout."""
+    if barrel_decisions is None and not allow_ungated:
+        raise ValueError(
+            "count_beta_barrel_staves requires barrel_decisions from beta-barrel-detection "
+            "or explicit allow_ungated=True for exploratory counting"
+        )
     cfg = build_config(overrides)
     cfg = apply_runtime_overrides(
         cfg,
@@ -30,10 +37,63 @@ def count_beta_barrel_staves(
         prepare_workers=prepare_workers,
         out_csv=str(output) if output is not None else None,
     )
-    return run_pipeline_result(
+    should_write_csv = bool(output) if write_csv is None else bool(write_csv)
+    if barrel_decisions is None:
+        return run_pipeline_result(
+            cfg,
+            write_csv=should_write_csv,
+            print_summary=print_summary,
+            show_progress=bool(print_summary),
+            strict_input=True,
+            raise_on_all_prepare_failures=True,
+        )
+
+    from .cli import (
+        _apply_barrel_decisions,
+        _load_barrel_decisions,
+        _write_gated_manifest,
+        _write_gated_metadata,
+    )
+    from .io.results import print_results_summary, write_results_csv
+
+    decisions = _load_barrel_decisions(str(barrel_decisions))
+    result = run_pipeline_result(
         cfg,
-        write_csv=write_csv,
-        print_summary=print_summary,
+        write_csv=False,
+        print_summary=False,
+        show_progress=bool(print_summary),
         strict_input=True,
-        raise_on_all_prepare_failures=True,
+        raise_on_all_prepare_failures=False,
+    )
+    rows = _apply_barrel_decisions(result.raw_rows(), decisions)
+    output_path = cfg.output.csv_path if should_write_csv else None
+    if should_write_csv:
+        write_results_csv(rows, cfg.output.csv_path)
+        _write_gated_metadata(
+            cfg=cfg,
+            result=result,
+            rows=rows,
+            output_csv=cfg.output.csv_path,
+            barrel_decisions_csv=str(barrel_decisions),
+        )
+        _write_gated_manifest(
+            cfg=cfg,
+            result=result,
+            rows=rows,
+            output_csv=cfg.output.csv_path,
+            barrel_decisions_csv=str(barrel_decisions),
+        )
+    if print_summary:
+        print_results_summary(
+            rows,
+            cfg.output.csv_path,
+            summary_limit=cfg.output.summary_limit,
+            write_csv=False,
+            output_written=should_write_csv,
+        )
+    return PipelineRunResult.from_rows(
+        rows,
+        input_files=result.input_files,
+        output_path=output_path,
+        config=cfg,
     )

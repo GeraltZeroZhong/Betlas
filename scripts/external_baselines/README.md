@@ -18,6 +18,18 @@ outputs are intentionally excluded from the source tree. Install each upstream
 method under the license and citation requirements of that project, then pass
 its executable or checkout path to the corresponding wrapper.
 
+Run Python adapters from the repository root with both the root and `src/` on
+`PYTHONPATH`:
+
+```bash
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py --help
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/isitabarrel/structure_map.py --help
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/pred_tmbb2/structure_sequence.py --help
+```
+
+Shell wrappers under `beta_barrel_staves/stave_count_wrappers/scripts/` can be
+run directly with `bash ... --help`.
+
 ## External Methods
 
 | Method | Role in Betlas analyses | Upstream source |

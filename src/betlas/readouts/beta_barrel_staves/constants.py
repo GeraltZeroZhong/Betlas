@@ -32,10 +32,14 @@ RESULT_ERROR = "ERROR"
 
 DEFAULT_RESULT_COLUMNS = (
     "filename",
+    "source_path",
     "chain",
     "result",
     "result_stage",
     "strand_count",
+    "score_type",
+    "calibration_status",
+    "config_profile",
     "confidence",
     "confidence_basis",
     "count_threshold",
@@ -151,7 +155,7 @@ SUMMARY_DISPLAY_NAMES = {
     "result": "Result",
     "strand_count": "Strands",
     "confidence": "Conf.",
-    "layer_counts": "Support/Usable/Total",
+    "layer_counts": "Consensus/Usable/Total Layers",
     "candidate_strands": "Candidates",
     "reason": "Reason",
 }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import os
+import tempfile
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -27,19 +29,15 @@ SUMMARY_DISPLAY_NAMES = {
 
 
 def _result_fieldnames(rows: list[dict[str, object]]) -> list[str]:
-    ordered_keys: list[str] = []
-    seen_keys: set[str] = set()
-    for key in DEFAULT_RESULT_COLUMNS:
-        if any(key in row for row in rows):
-            ordered_keys.append(key)
-            seen_keys.add(key)
+    ordered_keys: list[str] = list(DEFAULT_RESULT_COLUMNS)
+    seen_keys: set[str] = set(DEFAULT_RESULT_COLUMNS)
 
     for row in rows:
         for key in row:
             if key not in seen_keys:
                 seen_keys.add(key)
                 ordered_keys.append(key)
-    return ordered_keys or list(DEFAULT_RESULT_COLUMNS)
+    return ordered_keys
 
 
 def _row_for_fieldnames(row: dict[str, object], fieldnames: list[str]) -> dict[str, object]:
@@ -60,16 +58,22 @@ class ResultCsvWriter:
         self.fieldnames = list(fieldnames or DEFAULT_RESULT_COLUMNS)
         self._handle = None
         self._writer = None
+        self._tmp_path: Path | None = None
+        self._closed_with_error = False
 
     def __enter__(self) -> ResultCsvWriter:
         _ensure_output_parent(self.output_path)
-        self._handle = open(self.output_path, "w", newline="", encoding="utf-8")
+        target = Path(self.output_path).expanduser()
+        with tempfile.NamedTemporaryFile(delete=False, dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp") as handle:
+            self._tmp_path = Path(handle.name)
+        self._handle = self._tmp_path.open("w", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._handle, fieldnames=self.fieldnames)
         self._writer.writeheader()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        del exc_type, exc, traceback
+        self._closed_with_error = exc_type is not None
+        del exc, traceback
         self.close()
 
     def write_rows(self, rows: Iterable[dict[str, object]]) -> None:
@@ -83,17 +87,34 @@ class ResultCsvWriter:
             self._handle.close()
             self._handle = None
             self._writer = None
+        if self._tmp_path is not None:
+            target = Path(self.output_path).expanduser()
+            if self._closed_with_error:
+                self._tmp_path.unlink(missing_ok=True)
+            else:
+                os.replace(self._tmp_path, target)
+            self._tmp_path = None
 
 
 def write_results_csv(rows: list[dict[str, object]], output_path: str) -> None:
     """Write result rows without requiring pandas."""
     ordered_keys = _result_fieldnames(rows)
     _ensure_output_parent(output_path)
-    with open(output_path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=ordered_keys)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(_row_for_fieldnames(row, ordered_keys))
+    target = Path(output_path).expanduser()
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp") as handle:
+            tmp_path = Path(handle.name)
+        with tmp_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=ordered_keys)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(_row_for_fieldnames(row, ordered_keys))
+        os.replace(tmp_path, target)
+        tmp_path = None
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
 
 
 def _safe_int(value: object, default: int = 0) -> int:

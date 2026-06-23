@@ -175,6 +175,9 @@ class DetectionResult:
     result_stage: str
     reason: str
     source_path: str = ""
+    score_type: str = "heuristic"
+    calibration_status: str = "uncalibrated"
+    config_profile: str = "native"
     decision_score: float = 0.0
     decision_basis: str = ""
     decision_threshold: float = 0.0
@@ -214,6 +217,9 @@ class DetectionResult:
             result=str(row.get("result", "")),
             result_stage=str(row.get("result_stage", "")),
             reason=str(row.get("reason", "")),
+            score_type=str(row.get("score_type", "heuristic")),
+            calibration_status=str(row.get("calibration_status", "uncalibrated")),
+            config_profile=str(row.get("config_profile", "native")),
             decision_score=to_float("decision_score"),
             decision_basis=str(row.get("decision_basis", "")),
             decision_threshold=to_float("decision_threshold"),

@@ -1,10 +1,12 @@
+# Source-tree release recipe. Inputs under data/ and runs/ are generated/local
+# artifacts; this config is not a clean-clone quickstart.
 schema: betlas.topology-diagnostics-config.v1
 
 io:
   features_csv: data/processed/betlas_cath_features.csv
-  predictions_csv: runs/betlas_full_benchmark/oof_predictions.csv
+  predictions_csv: null
   output_csv: runs/readouts/topology_diagnostics_full/topology_diagnostics.csv
   manifest_path: runs/readouts/topology_diagnostics_full/topology_diagnostics.manifest.json
 
 probability:
-  model: xgboost_tuned
+  model: hist_gradient_boosting

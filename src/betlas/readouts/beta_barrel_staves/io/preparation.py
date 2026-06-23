@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..config import AppConfig
 from ..gates.barrel_gate import (
@@ -27,6 +28,7 @@ class PrepareFailure:
 def prepare_one_file(file_path: str, cfg: AppConfig) -> list[dict[str, object]] | PrepareFailure:
     """Parse a structure once, run DSSP once, and produce per-chain payloads."""
     filename = os.path.basename(file_path)
+    source_path = str(Path(file_path).expanduser().resolve())
     try:
         cfg = deepcopy(cfg)
         cfg.runtime.dssp_bin_path = require_dssp_binary(cfg.runtime.dssp_bin_path)
@@ -40,7 +42,7 @@ def prepare_one_file(file_path: str, cfg: AppConfig) -> list[dict[str, object]] 
             fail_on_dssp_error=cfg.runtime.fail_on_dssp_error,
         )
     except Exception as exc:
-        return PrepareFailure(f"{filename}: {exc}")
+        return PrepareFailure(f"{source_path}: {exc}")
 
     barrel_gate_decisions = {}
     gate_bypassed_after_error = False
@@ -49,21 +51,26 @@ def prepare_one_file(file_path: str, cfg: AppConfig) -> list[dict[str, object]] 
             barrel_gate_decisions = run_external_barrel_gate(file_path, cfg)
         except Exception as exc:
             if cfg.barrel_gate.fail_on_error:
-                return PrepareFailure(f"{filename}: {exc}")
+                return PrepareFailure(f"{source_path}: {exc}")
             barrel_gate_decisions = {}
             gate_bypassed_after_error = True
 
     payloads: list[dict[str, object]] = []
+    requested_chain = str(getattr(cfg.input, "chain_id", "") or "").strip()
+    seen_chains: list[str] = []
     for chain_index, chain in enumerate(loader.model):
         chain_id = chain.id
+        seen_chains.append(str(chain_id))
         try:
             residues_data = loader.get_chain_data(chain_id)
         except Exception as exc:
-            return PrepareFailure(f"{filename}: {exc}")
+            return PrepareFailure(f"{source_path}: {exc}")
 
         effective_chain_id = (
             str(residues_data[0].get("chain", chain_id)) if residues_data else str(chain.id)
         )
+        if requested_chain and requested_chain not in {str(chain_id), effective_chain_id}:
+            continue
 
         if cfg.barrel_gate.enabled:
             gate_decision = gate_decision_for_chain(
@@ -81,7 +88,7 @@ def prepare_one_file(file_path: str, cfg: AppConfig) -> list[dict[str, object]] 
         payloads.append(
             {
                 "filename": filename,
-                "source_path": file_path,
+                "source_path": source_path,
                 "chain": effective_chain_id,
                 "_chain_index": chain_index,
                 "dssp_status": "error" if loader.secondary_structure_error else "ok",
@@ -89,6 +96,12 @@ def prepare_one_file(file_path: str, cfg: AppConfig) -> list[dict[str, object]] 
                 "residues_data": residues_data,
                 "barrel_gate": gate_decision.to_dict(),
             }
+        )
+
+    if requested_chain and not payloads:
+        available = ", ".join(seen_chains) if seen_chains else "<none>"
+        return PrepareFailure(
+            f"{source_path}: chain {requested_chain!r} was not found; available chains: {available}"
         )
 
     has_dssp_error = any(str(payload.get("dssp_error", "")) for payload in payloads)

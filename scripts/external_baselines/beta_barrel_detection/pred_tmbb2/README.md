@@ -45,10 +45,10 @@ threshold if needed.
 ## Existing FASTA Example
 
 ```bash
-python scripts/external_baselines/beta_barrel_detection/pred_tmbb2/runner.py \
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/pred_tmbb2/runner.py \
   path/to/sequences.fasta \
   --juchmme-dir /path/to/juchmme_git \
-  --out eval_outputs/pred_tmbb2_single_juchmme.csv
+  --out runs/external_baselines/pred_tmbb2_single_juchmme.csv
 ```
 
 ## Structure-to-Sequence Workflow
@@ -57,11 +57,11 @@ When starting from PDB/CIF/mmCIF structures, generate one chain-level FASTA
 record per analyzable chain and run the baseline:
 
 ```bash
-python scripts/external_baselines/beta_barrel_detection/pred_tmbb2/structure_sequence.py \
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/pred_tmbb2/structure_sequence.py \
   path/to/structures \
-  --out-dir eval_outputs/pred_tmbb2_single_juchmme \
+  --out-dir runs/external_baselines/pred_tmbb2_single_juchmme \
   --juchmme-dir /path/to/juchmme_git \
-  --out eval_outputs/pred_tmbb2_single_juchmme.csv
+  --out runs/external_baselines/pred_tmbb2_single_juchmme.csv
 ```
 
 The generator writes:
@@ -70,6 +70,6 @@ The generator writes:
 - `residue_mapping.csv`: sequence index to source residue mapping
 - `juchmme_work/`: upstream working directory
 
-For smoke tests, this repository uses a tiny fake JUCHMME runner under
-`scripts/external_baselines/beta_barrel_detection/pred_tmbb2_smoke/` so the adapter can be tested without
-vendoring or downloading GPL code.
+For smoke tests, create a tiny local JUCHMME-compatible executable under
+`runs/external_baselines/pred_tmbb2_smoke/` and pass its release root with
+`--juchmme-dir`. Generated smoke files should stay under `runs/`.

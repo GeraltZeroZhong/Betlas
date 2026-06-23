@@ -134,10 +134,14 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
             "_source_path": source_path,
             "_chain_index": chain_index,
             "filename": filename,
+            "source_path": source_path,
             "chain": chain_id,
             "result": result,
             "result_stage": result_stage,
             "strand_count": int(report.get("strand_count", 0) or 0),
+            "score_type": "heuristic",
+            "calibration_status": "uncalibrated",
+            "config_profile": "native",
             "confidence": float(report.get("confidence", 0.0) or 0.0),
             "confidence_basis": str(report.get("confidence_basis", "")),
             "count_threshold": float(count_cfg.min_confidence),
@@ -337,6 +341,13 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
             result_stage="prefilter",
         )
 
+    if dssp_error:
+        return build_row(
+            RESULT_ERROR,
+            f"DSSP failed before beta-sheet assignment: {dssp_error}",
+            result_stage="dssp",
+        )
+
     all_coordinates = np.array([residue["coord"] for residue in residues_data], dtype=float)
     if sheet_residue_count < min_sheet_residues:
         reason = format_below_threshold_reason(
@@ -344,8 +355,6 @@ def analyze_chain_payload(payload: dict[str, object], cfg: AppConfig) -> dict[st
             sheet_residue_count,
             min_sheet_residues,
         )
-        if dssp_error:
-            reason = f"DSSP failed during preparation; {reason}. DSSP error: {dssp_error}"
         return build_row(
             RESULT_FILTERED_OUT,
             reason,

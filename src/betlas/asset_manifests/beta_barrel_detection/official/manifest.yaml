@@ -1,0 +1,73 @@
+schema_version: betlas.asset-manifest.v1
+asset_id: betlas-beta-barrel-detection-official-v1
+asset_type: official_readout_bundle
+readout: beta_barrel_detection
+profile: betlas_151_layer_radial16_official
+release_status: pending_release
+bundle: pending-local-mirror.zip
+bundle_subdir: beta_barrel_detection/official
+generated_by:
+  - scripts/reproducibility/readout_benchmarks/beta_barrel_detection/run_betlas151_layer_radial16_official.py
+source_inputs:
+  - Betlas 151 layer/radial16 official beta-barrel detection bundle
+files:
+  - filename: benchmark_cohort.csv
+    purpose: fixed-cohort record table with labels, selected chains, splits, and structure provenance
+    byte_size: 401674
+    sha256: d4cdc0017c0d814576256e3a1cdda0d5cc3ae69f1cb0046232c34ff2829c4061
+    download_path: beta_barrel_detection/official/benchmark_cohort.csv
+  - filename: feature_columns_151.csv
+    purpose: ordered Betlas 151 feature column list
+    byte_size: 4249
+    sha256: 6fa3187d9632fe59c7c567c822f856cb8032b71117d29c5074c6c9b346c4be74
+    download_path: beta_barrel_detection/official/feature_columns_151.csv
+  - filename: layer_radial16_feature_manifest.csv
+    purpose: layer/radial auxiliary feature manifest
+    byte_size: 2977
+    sha256: 59ad6dfbc2bb76ad9ed5dda5bc6accb5f818ada3ab827e02dd75baf8bb29b7b0
+    download_path: beta_barrel_detection/official/layer_radial16_feature_manifest.csv
+  - filename: layer_radial16_feature_values.csv
+    purpose: layer/radial auxiliary feature values
+    byte_size: 204998
+    sha256: 3605e7aaba0e31c40b1cba845277c775c9bd2821f8a853663bf0bcb17691f2d5
+    download_path: beta_barrel_detection/official/layer_radial16_feature_values.csv
+  - filename: betlas_151_chain_features.csv
+    purpose: Betlas 151 chain-level feature table
+    byte_size: 3367619
+    sha256: 7a54afe4369ffa2a1dc2622d53b8e6c9f0a0552cec32ebfecbf778fec630cdd5
+    download_path: beta_barrel_detection/official/betlas_151_chain_features.csv
+  - filename: esmc_mean_embeddings_aligned.npz
+    purpose: aligned ESM-C mean embeddings for the official cohort
+    byte_size: 6312422
+    sha256: 5bdb7edba95c92175a386d48163a98f11f63e9903071c788788ea654461cc15b
+    download_path: beta_barrel_detection/official/esmc_mean_embeddings_aligned.npz
+  - filename: metadata.json
+    purpose: official run metadata
+    byte_size: 3034
+    sha256: fe5cde7b00fa8a377ac1b3d01f241577a81eae212923a68bc00b338e0332d74e
+    download_path: beta_barrel_detection/official/metadata.json
+  - filename: official_summary.csv
+    purpose: official run summary table
+    byte_size: 1078
+    sha256: ef4956ae7e11af891e889c8e4b1c91fdd1b5825c0700549871e86aa79bf3b688
+    download_path: beta_barrel_detection/official/official_summary.csv
+  - filename: official_fold_metrics.csv
+    purpose: grouped outer-fold metrics for official active readout branches
+    byte_size: 3616
+    sha256: f75cf507c4bcba06b0ce3e8fb8f5c925023d31ebedddf26e3ca9383ad6381c2c
+    download_path: beta_barrel_detection/official/official_fold_metrics.csv
+  - filename: official_per_record_predictions.csv
+    purpose: per-record out-of-fold predictions for official active readout branches
+    byte_size: 1700861
+    sha256: 4f088e93e2fff8d7268bfd61855f705eccbde36cc29cb49acc31e089e38517c0
+    download_path: beta_barrel_detection/official/official_per_record_predictions.csv
+  - filename: external_baseline_comparison.csv
+    purpose: comparison table joining official active readouts with external baselines
+    byte_size: 821
+    sha256: eb02af12be42ed0cf27a37691fbb8cc2f041aaf5ea33bac0a592d23c39ebaba6
+    download_path: beta_barrel_detection/official/external_baseline_comparison.csv
+  - filename: summary.md
+    purpose: human-readable official run summary
+    byte_size: 1251
+    sha256: 43ebbbb7ef78afc406a8ef6bd13a4b90d06a3c1e74abaaee350c498fac4badfd
+    download_path: beta_barrel_detection/official/summary.md

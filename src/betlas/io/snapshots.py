@@ -9,7 +9,7 @@ import pandas as pd
 
 from ..constants import CATH_URLS, DEFAULT_CATH_DIR, DEFAULT_MMCIF_DIR
 from ..provenance import build_run_manifest, file_state, write_json
-from .rcsb import mmcif_path_for
+from .rcsb import mmcif_path_for, validate_pdb_id
 
 
 def _count_gzip_data_lines(path: Path) -> int:
@@ -40,7 +40,7 @@ def cath_source_snapshot(cath_dir: str | Path = DEFAULT_CATH_DIR) -> dict[str, A
         files[key] = state
     return {
         "source": "CATH-B daily-release newest",
-        "release_policy": "daily-release/newest; freeze this manifest for publication archives",
+        "release_policy": "daily-release/newest; freeze this manifest for release snapshots",
         "cath_dir": str(base),
         "files": files,
     }
@@ -50,11 +50,18 @@ def _pdb_ids_from_labels(labels_csv: str | Path | None) -> list[str]:
     if labels_csv is None:
         return []
     labels = pd.read_csv(labels_csv, usecols=["pdb_id"], dtype=str, keep_default_na=False)
-    return sorted({str(value).strip().lower() for value in labels["pdb_id"] if str(value).strip()})
+    return sorted({validate_pdb_id(str(value)) for value in labels["pdb_id"] if str(value).strip()})
 
 
 def _scan_mmcif_ids(mmcif_dir: Path) -> list[str]:
-    return sorted(path.name.removesuffix(".cif.gz").lower() for path in mmcif_dir.glob("*.cif.gz"))
+    ids: list[str] = []
+    for path in mmcif_dir.glob("*.cif.gz"):
+        stem = path.name.removesuffix(".cif.gz")
+        try:
+            ids.append(validate_pdb_id(stem))
+        except ValueError:
+            continue
+    return sorted(ids)
 
 
 def mmcif_source_snapshot(
@@ -64,7 +71,7 @@ def mmcif_source_snapshot(
     labels_csv: str | Path | None = None,
 ) -> dict[str, Any]:
     base = Path(mmcif_dir)
-    ids = sorted({str(pdb_id).strip().lower() for pdb_id in (pdb_ids or []) if str(pdb_id).strip()})
+    ids = sorted({validate_pdb_id(str(pdb_id)) for pdb_id in (pdb_ids or []) if str(pdb_id).strip()})
     if not ids:
         ids = _pdb_ids_from_labels(labels_csv) or _scan_mmcif_ids(base)
 
@@ -133,7 +140,7 @@ def enrich_feature_table_with_mmcif_provenance(
     features = pd.read_csv(features_csv, dtype=str, keep_default_na=False)
     base = Path(mmcif_dir)
     states: dict[str, dict[str, Any]] = {}
-    for pdb_id in sorted({str(value).strip().lower() for value in features["pdb_id"] if str(value).strip()}):
+    for pdb_id in sorted({validate_pdb_id(str(value)) for value in features["pdb_id"] if str(value).strip()}):
         states[pdb_id] = file_state(mmcif_path_for(pdb_id, base))
 
     features["source_mmcif_path"] = features["pdb_id"].map(

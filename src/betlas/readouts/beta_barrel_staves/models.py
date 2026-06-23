@@ -301,6 +301,7 @@ class StrandCountResult:
     result: str
     result_stage: str
     reason: str
+    source_path: str = ""
     strand_count: int = 0
     confidence: float = 0.0
     confidence_basis: str = ""

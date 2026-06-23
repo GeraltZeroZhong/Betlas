@@ -29,7 +29,12 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from ..constants import FOLD_LABELS
 from ..provenance import build_run_manifest, write_json
+from ..schema import normalize_feature_columns
 from .splits import fold_label_counts, make_grouped_splits
+
+BENCHMARK_REQUIRED_COLUMNS = ("record_id", "pdb_id", "domain_id", "fold_label_final")
+BENCHMARK_GROUP_COLUMNS = ("cath_s35_cluster_id", "cath_homology_code", "pdb_id")
+RULE_SCORE_COLUMNS = tuple(f"betlas_rule_score_{label}" for label in FOLD_LABELS)
 
 ID_COLUMNS = {
     "record_id",
@@ -48,7 +53,7 @@ ID_COLUMNS = {
     "curation_date",
     "label_conflict_notes",
     "qc_status",
-    "allowed_for_publication_benchmark",
+    "allowed_for_benchmark",
     "discovered_by_betlas",
     "cath_status",
     "cath_code",
@@ -58,43 +63,49 @@ ID_COLUMNS = {
     "cath_s35_cluster_id",
     "cath_s35_source",
     "cath_name",
-    "cz_top_fold",
-    "cz_fold_scores_json",
-    "cz_warnings",
-    "cz_error",
-    "cz_axis_best_name",
+    "betlas_top_fold",
+    "betlas_fold_scores_json",
+    "betlas_warnings",
+    "betlas_error",
+    "betlas_axis_best_name",
 }
 
 DEPRECATED_SCIENTIFIC_FEATURE_COLUMNS = {
     # Older feature tables computed this from hemisphere-stabilized SSE axes, so
     # the sign does not encode N-to-C strand direction.
-    "cz_strand_direction_parallel_fraction",
+    "betlas_strand_direction_parallel_fraction",
 }
 
 READOUT_FEATURE_COLUMNS = {
-    "cz_boundary_region_flag",
-    "cz_jelly_rollness",
-    "cz_sandwichness",
-    "cz_barrel_likeness",
-    "cz_jelly_sandwich_overlap",
-    "cz_barrel_sandwich_overlap",
-    "cz_barrel_jelly_overlap",
-    "cz_mixed_topology_score",
-    "cz_mixed_topology_flag",
-    "cz_secondary_topology_score",
+    "betlas_boundary_region_flag",
+    "betlas_jelly_rollness",
+    "betlas_sandwichness",
+    "betlas_barrel_likeness",
+    "betlas_jelly_sandwich_overlap",
+    "betlas_barrel_sandwich_overlap",
+    "betlas_barrel_jelly_overlap",
+    "betlas_mixed_topology_score",
+    "betlas_mixed_topology_flag",
+    "betlas_secondary_topology_score",
 }
 
 READOUT_FEATURE_PREFIXES = (
-    "cz_topology_ambiguity_",
-    "cz_probability_",
-    "cz_rule_top",
-    "cz_rule_probability_",
-    "cz_rule_label_conflict",
-    "cz_neighbor_",
-    "cz_boundary_neighbor_",
-    "cz_mixed_topology_",
-    "cz_manual_boundary_audit_",
+    "betlas_topology_ambiguity_",
+    "betlas_probability_",
+    "betlas_rule_top",
+    "betlas_rule_probability_",
+    "betlas_rule_label_conflict",
+    "betlas_neighbor_",
+    "betlas_boundary_neighbor_",
+    "betlas_mixed_topology_",
+    "betlas_manual_boundary_audit_",
 )
+AGGREGATE_FEATURE_PREFIXES = ("betlas_rule_score_",)
+AGGREGATE_FEATURES = {
+    "betlas_rule_margin",
+    "betlas_parse_ok",
+}
+FEATURE_SETS = ("raw_geometry", "raw_plus_rule_scores", "rules_only")
 
 
 CONFIG_RESOURCE = "conf/default.yaml"
@@ -149,12 +160,16 @@ class RuleScoreClassifier(BaseEstimator, ClassifierMixin):
         return self
 
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        score_cols = [f"cz_rule_score_{label}" for label in self.labels]
+        score_cols = [f"betlas_rule_score_{label}" for label in self.labels]
+        missing = [column for column in score_cols if column not in X]
+        if missing:
+            raise ValueError(
+                "grammar_rules benchmark requires precomputed Betlas rule-score columns; "
+                f"missing columns: {', '.join(missing)}"
+            )
         raw = np.column_stack(
             [
                 pd.to_numeric(X[col], errors="coerce").fillna(0.0).to_numpy()
-                if col in X
-                else np.zeros(len(X))
                 for col in score_cols
             ]
         )
@@ -185,7 +200,7 @@ def numeric_feature_columns(df: pd.DataFrame) -> list[str]:
             continue
         if col in DEPRECATED_SCIENTIFIC_FEATURE_COLUMNS:
             continue
-        if not col.startswith("cz_"):
+        if not col.startswith("betlas_"):
             continue
         numeric = pd.to_numeric(df[col], errors="coerce")
         if numeric.notna().sum() == 0:
@@ -194,14 +209,176 @@ def numeric_feature_columns(df: pd.DataFrame) -> list[str]:
     return columns
 
 
-def _first_nonempty_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
-    out = pd.Series("", index=df.index, dtype=object)
+def raw_geometry_feature_columns(df: pd.DataFrame) -> list[str]:
+    columns: list[str] = []
+    for column in numeric_feature_columns(df):
+        if column in AGGREGATE_FEATURES:
+            continue
+        if any(column.startswith(prefix) for prefix in AGGREGATE_FEATURE_PREFIXES):
+            continue
+        columns.append(column)
+    return columns
+
+
+def feature_columns_for_set(df: pd.DataFrame, feature_set: str) -> list[str]:
+    if feature_set == "raw_geometry":
+        return raw_geometry_feature_columns(df)
+    if feature_set == "raw_plus_rule_scores":
+        return [
+            column
+            for column in numeric_feature_columns(df)
+            if column != "betlas_parse_ok" and column != "betlas_rule_margin"
+        ]
+    if feature_set == "rules_only":
+        return [column for column in RULE_SCORE_COLUMNS if column in df.columns]
+    available = ", ".join(FEATURE_SETS)
+    raise ValueError(f"unknown benchmark feature set {feature_set!r}; expected one of: {available}")
+
+
+def _connected_group_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    """Return grouping components linked by any non-empty public group column."""
+
+    n = len(df)
+    parent = list(range(n))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root == right_root:
+            return
+        if right_root < left_root:
+            left_root, right_root = right_root, left_root
+        parent[right_root] = left_root
+
+    seen_tokens: dict[str, int] = {}
+    row_has_token = [False] * n
     for column in columns:
         if column not in df:
             continue
+        values = df[column].astype(str).str.strip().str.upper().reset_index(drop=True)
+        for index, value in enumerate(values):
+            if not value:
+                continue
+            row_has_token[index] = True
+            token = f"{column}={value}"
+            previous = seen_tokens.get(token)
+            if previous is None:
+                seen_tokens[token] = index
+            else:
+                union(previous, index)
+
+    missing_indices = [index for index, has_token in enumerate(row_has_token) if not has_token]
+    if missing_indices:
+        examples = ", ".join(str(df.index[index]) for index in missing_indices[:10])
+        more = f"; plus {len(missing_indices) - 10} more" if len(missing_indices) > 10 else ""
+        raise ValueError(
+            "grouped cross-validation requires every retained row to have at least one "
+            f"non-empty group identifier in {', '.join(columns)}; missing row indices: "
+            f"{examples}{more}"
+        )
+
+    labels: list[str] = []
+    root_to_label: dict[int, str] = {}
+    for index in range(n):
+        root = find(index)
+        label = root_to_label.get(root)
+        if label is None:
+            tokens = sorted(token for token, token_index in seen_tokens.items() if find(token_index) == root)
+            label = "|".join(tokens[:4]) + (f"|plus_{len(tokens) - 4}_more" if len(tokens) > 4 else "")
+            root_to_label[root] = label
+        labels.append(label)
+    return pd.Series(labels, index=df.index, dtype=object)
+
+
+def _group_presence_mask(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    present = pd.Series(False, index=df.index)
+    for column in columns:
+        if column not in df:
+            continue
+        present = present | df[column].astype(str).str.strip().ne("")
+    return present
+
+
+def _missing_group_examples(df: pd.DataFrame, mask: pd.Series, *, limit: int = 10) -> list[str]:
+    if "record_id" in df.columns:
+        values = df.loc[~mask, "record_id"].astype(str).str.strip()
+        values = values[values.ne("")]
+        if not values.empty:
+            return values.head(limit).tolist()
+    return [str(index) for index in df.index[~mask][:limit]]
+
+
+def _require_columns(df: pd.DataFrame, columns: tuple[str, ...], *, context: str) -> None:
+    missing = [column for column in columns if column not in df.columns]
+    if missing:
+        raise ValueError(f"{context} requires column(s): {', '.join(missing)}")
+
+
+def _group_source_counts(df: pd.DataFrame) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    remaining = pd.Series(True, index=df.index)
+    for column in BENCHMARK_GROUP_COLUMNS:
+        if column not in df:
+            counts[column] = 0
+            continue
         values = df[column].astype(str).str.strip()
-        out = out.mask(out.astype(str).str.strip() == "", values)
-    return out
+        selected = remaining & values.ne("")
+        counts[column] = int(selected.sum())
+        remaining = remaining & ~selected
+    counts["empty"] = int(remaining.sum())
+    return counts
+
+
+def _validate_rule_score_values(df: pd.DataFrame) -> None:
+    missing = [column for column in RULE_SCORE_COLUMNS if column not in df.columns]
+    if missing:
+        raise ValueError(
+            "grammar_rules benchmark requires precomputed Betlas rule-score columns; "
+            f"missing columns: {', '.join(missing)}. "
+            "Run 'betlas grammar score' and join the score columns, or remove grammar_rules from the benchmark config."
+        )
+    invalid: list[str] = []
+    for column in RULE_SCORE_COLUMNS:
+        values = pd.to_numeric(df[column], errors="coerce")
+        if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
+            invalid.append(column)
+    if invalid:
+        raise ValueError(
+            "grammar_rules benchmark requires finite numeric rule-score values; "
+            f"invalid columns: {', '.join(invalid)}"
+        )
+
+
+def _split_summary(
+    splits: list[tuple[np.ndarray, np.ndarray]],
+    labels: pd.Series,
+    groups: np.ndarray,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    all_labels = sorted(FOLD_LABELS)
+    label_values = labels.to_numpy()
+    for fold, (train_idx, test_idx) in enumerate(splits, start=1):
+        train_counts = pd.Series(label_values[train_idx]).value_counts().to_dict()
+        test_counts = pd.Series(label_values[test_idx]).value_counts().to_dict()
+        rows.append(
+            {
+                "fold": int(fold),
+                "train_rows": int(len(train_idx)),
+                "test_rows": int(len(test_idx)),
+                "train_group_count": int(pd.Series(groups[train_idx]).astype(str).nunique()),
+                "test_group_count": int(pd.Series(groups[test_idx]).astype(str).nunique()),
+                "train_class_counts": {label: int(train_counts.get(label, 0)) for label in all_labels},
+                "test_class_counts": {label: int(test_counts.get(label, 0)) for label in all_labels},
+                "missing_test_classes": [label for label in all_labels if int(test_counts.get(label, 0)) == 0],
+            }
+        )
+    return rows
 
 
 def _make_models(
@@ -403,6 +580,59 @@ def _top2_accuracy(y_true: np.ndarray, probabilities: np.ndarray) -> float:
     return float(np.mean([truth in row for truth, row in zip(y_true, top2, strict=False)]))
 
 
+def _align_predict_proba(
+    probabilities: np.ndarray,
+    estimator: Any,
+    *,
+    labels: list[str],
+    model_name: str,
+    fold: int,
+) -> tuple[np.ndarray, list[str]]:
+    warnings: list[str] = []
+    proba = np.asarray(probabilities, dtype=float)
+    if proba.ndim != 2:
+        warnings.append(f"{model_name} fold {fold}: predict_proba returned non-matrix output")
+        return np.zeros((len(proba), len(labels)), dtype=float), warnings
+
+    classes = getattr(estimator, "classes_", None)
+    if classes is None or len(classes) == 0:
+        if proba.shape[1] == len(labels):
+            return proba, warnings
+        warnings.append(
+            f"{model_name} fold {fold}: predict_proba had {proba.shape[1]} columns but estimator classes_ was unavailable"
+        )
+        aligned = np.zeros((proba.shape[0], len(labels)), dtype=float)
+        cols = min(proba.shape[1], len(labels))
+        aligned[:, :cols] = proba[:, :cols]
+        return aligned, warnings
+
+    aligned = np.zeros((proba.shape[0], len(labels)), dtype=float)
+    class_values = list(classes)
+    if len(class_values) != proba.shape[1]:
+        warnings.append(
+            f"{model_name} fold {fold}: predict_proba column count {proba.shape[1]} "
+            f"does not match classes_ length {len(class_values)}"
+        )
+    used_classes: set[int] = set()
+    for source_col, class_value in enumerate(class_values[: proba.shape[1]]):
+        try:
+            target_col = int(class_value)
+        except (TypeError, ValueError):
+            warnings.append(f"{model_name} fold {fold}: non-integer class label {class_value!r}")
+            continue
+        if 0 <= target_col < len(labels):
+            aligned[:, target_col] = proba[:, source_col]
+            used_classes.add(target_col)
+        else:
+            warnings.append(f"{model_name} fold {fold}: class index {target_col} outside global labels")
+    missing = [labels[index] for index in range(len(labels)) if index not in used_classes]
+    if missing:
+        warnings.append(
+            f"{model_name} fold {fold}: predict_proba omitted classes filled with 0: {', '.join(missing)}"
+        )
+    return aligned, warnings
+
+
 def run_grouped_benchmark(
     features_csv: Path,
     out_dir: Path,
@@ -418,50 +648,220 @@ def run_grouped_benchmark(
         config=OmegaConf.create(benchmark_config),
         f=out_dir / "benchmark_config_resolved.yaml",
     )
-    df = pd.read_csv(features_csv, dtype=str, keep_default_na=False)
-    df = df[df["fold_label_final"].isin(FOLD_LABELS)].copy()
-    df = df[pd.to_numeric(df.get("cz_parse_ok", 0), errors="coerce").fillna(0).astype(int) == 1]
-    feature_cols = numeric_feature_columns(df)
+    df_all = normalize_feature_columns(pd.read_csv(features_csv, dtype=str, keep_default_na=False))
+    _require_columns(df_all, BENCHMARK_REQUIRED_COLUMNS, context="benchmark")
+    label_mask = df_all["fold_label_final"].isin(FOLD_LABELS)
+    df = df_all[label_mask].copy()
+    parse_mask = pd.to_numeric(df.get("betlas_parse_ok", 0), errors="coerce").fillna(0).astype(int) == 1
+    df = df[parse_mask].copy()
+    feature_set = str(_cfg_get(benchmark_config, "features.set", "raw_geometry"))
+    feature_cols = feature_columns_for_set(df, feature_set)
     if not feature_cols:
-        raise ValueError("no numeric cz_* feature columns were found")
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                "status": "failed",
+                "failure_stage": "feature_schema",
+                "error": "no numeric betlas_* feature columns were found",
+                "input_rows": int(len(df_all)),
+                "label_filtered_rows": int(label_mask.sum()),
+                "parse_ok_rows": int(len(df)),
+                "feature_set": feature_set,
+                "feature_count": 0,
+                "features_csv": str(features_csv),
+            },
+        )
+        raise ValueError("no numeric betlas_* feature columns were found")
 
     labels = sorted(FOLD_LABELS)
     encoder = LabelEncoder()
     encoder.fit(labels)
     y = encoder.transform(df["fold_label_final"])
     X = df[feature_cols].apply(pd.to_numeric, errors="coerce")
-    groups = _first_nonempty_series(
-        df, ("cath_s35_cluster_id", "cath_homology_code", "pdb_id")
-    ).to_numpy()
-    splits, split_strategy, n_splits = make_grouped_splits(
-        X,
-        y,
-        groups,
-        n_splits=n_splits,
-        random_state=random_state,
-    )
-    models = _make_models(random_state, tuple(encoder.classes_), benchmark_config)
     include = set(_included_models(benchmark_config))
+    group_presence = _group_presence_mask(df, BENCHMARK_GROUP_COLUMNS)
+    missing_group_count = int((~group_presence).sum())
+    group_examples = _missing_group_examples(df, group_presence)
+    groups = (
+        _connected_group_series(df, BENCHMARK_GROUP_COLUMNS).to_numpy()
+        if missing_group_count == 0
+        else np.asarray([], dtype=object)
+    )
+    missing_rule_scores = [column for column in RULE_SCORE_COLUMNS if column not in df.columns]
+    base_preflight = {
+        "input_rows": int(len(df_all)),
+        "label_filtered_rows": int(label_mask.sum()),
+        "parse_ok_rows": int(len(df)),
+        "dropped_rows": int(len(df_all) - len(df)),
+        "label_filter": f"fold_label_final in {list(FOLD_LABELS)}",
+        "parse_filter": "betlas_parse_ok == 1",
+        "class_counts": {str(k): int(v) for k, v in df["fold_label_final"].value_counts().sort_index().items()},
+        "group_columns_priority": list(BENCHMARK_GROUP_COLUMNS),
+        "grouping_strategy": "connected_components_across_group_columns",
+        "group_source_counts": _group_source_counts(df),
+        "missing_group_row_count": missing_group_count,
+        "missing_group_row_examples": group_examples,
+        "group_count": int(pd.Series(groups).astype(str).nunique()) if missing_group_count == 0 else 0,
+        "feature_set": feature_set,
+        "feature_count": int(len(feature_cols)),
+        "rule_score_columns_present": not missing_rule_scores,
+        "missing_rule_score_columns": missing_rule_scores,
+        "required_global_classes": list(FOLD_LABELS),
+        "missing_global_classes": sorted(set(FOLD_LABELS) - set(df["fold_label_final"].astype(str))),
+        "require_all_fold_labels": True,
+        "features_csv": str(features_csv),
+        "effective_split_strategy": "not_run",
+        "effective_n_splits": 0,
+        "folds": [],
+        "model_dependency_status": {model: "requested" for model in sorted(include)},
+        "allow_model_skip": bool(_cfg_get(benchmark_config, "models.allow_model_skip", False)),
+    }
+    if missing_group_count:
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **base_preflight,
+                "status": "failed",
+                "failure_stage": "group_coverage",
+                "effective_split_strategy": "not_run_missing_group_identifiers",
+                "error": (
+                    "benchmark requires every retained row to have at least one non-empty "
+                    f"group identifier in {', '.join(BENCHMARK_GROUP_COLUMNS)}; "
+                    f"missing rows: {group_examples}"
+                ),
+            },
+        )
+        raise ValueError(
+            "benchmark requires every retained row to have at least one non-empty "
+            f"group identifier in {', '.join(BENCHMARK_GROUP_COLUMNS)}; "
+            f"missing rows: {group_examples}"
+        )
+    if "grammar_rules" in include and missing_rule_scores:
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **base_preflight,
+                "status": "failed",
+                "failure_stage": "feature_schema",
+                "effective_split_strategy": "not_run_missing_rule_scores",
+                "error": (
+                    "grammar_rules benchmark requires complete Betlas rule-score columns; "
+                    f"missing: {missing_rule_scores}"
+                ),
+                "model_dependency_status": {"grammar_rules": "requested"},
+            },
+        )
+        _validate_rule_score_values(df)
+    missing_global_classes = sorted(set(FOLD_LABELS) - set(df["fold_label_final"].astype(str)))
+    if missing_global_classes:
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **base_preflight,
+                "status": "failed",
+                "failure_stage": "class_coverage",
+                "effective_split_strategy": "not_run_missing_global_classes",
+                "error": (
+                    "benchmark requires all Betlas fold labels before grouped CV; "
+                    f"missing global classes: {missing_global_classes}"
+                ),
+            },
+        )
+        raise ValueError(
+            "benchmark requires all Betlas fold labels before grouped CV; "
+            f"missing global classes: {missing_global_classes}"
+        )
+    try:
+        splits, split_strategy, n_splits = make_grouped_splits(
+            X,
+            y,
+            groups,
+            n_splits=n_splits,
+            random_state=random_state,
+        )
+    except ValueError as exc:
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **base_preflight,
+                "status": "failed",
+                "failure_stage": "split_coverage",
+                "effective_split_strategy": "split_failed",
+                "error": str(exc),
+                "split_error": str(exc),
+            },
+        )
+        raise
+    split_rows = _split_summary(splits, df["fold_label_final"], groups)
+    allow_model_skip = bool(_cfg_get(benchmark_config, "models.allow_model_skip", False))
+    model_status: dict[str, str] = {model: "requested" for model in sorted(include)}
+    xgboost_available = _xgboost_available()
+    xgboost_missing_error = ""
+    if "xgboost_tuned" in include and not xgboost_available and bool(_cfg_get(benchmark_config, "xgboost.enabled", True)):
+        model_status["xgboost_tuned"] = "unavailable: xgboost is not installed"
+        if not allow_model_skip:
+            xgboost_missing_error = (
+                "benchmark config requested xgboost_tuned, but xgboost is not installed. "
+                "Install betlas[ml] or set models.allow_model_skip=true."
+            )
+    preflight = {
+        **base_preflight,
+        "status": "failed" if xgboost_missing_error else "ok",
+        "failure_stage": "dependency" if xgboost_missing_error else "",
+        "effective_split_strategy": split_strategy,
+        "effective_n_splits": int(n_splits),
+        "folds": split_rows,
+        "model_dependency_status": model_status,
+    }
+    write_json(out_dir / "benchmark_preflight.json", preflight)
+    if xgboost_missing_error:
+        raise ValueError(xgboost_missing_error)
+    if "grammar_rules" in include:
+        _validate_rule_score_values(df)
+        X_rules = df[list(RULE_SCORE_COLUMNS)].apply(pd.to_numeric, errors="coerce")
+    else:
+        X_rules = pd.DataFrame(index=df.index)
+    models = _make_models(random_state, tuple(encoder.classes_), benchmark_config)
     if (
         "xgboost_tuned" in include
         and bool(_cfg_get(benchmark_config, "xgboost.enabled", True))
-        and _xgboost_available()
+        and xgboost_available
     ):
         models["xgboost_tuned"] = "TUNED_XGBOOST"
     if not models:
+        error = "benchmark config did not enable any available models"
+        write_json(
+            out_dir / "benchmark_preflight.json",
+            {
+                **preflight,
+                "status": "failed",
+                "failure_stage": "dependency",
+                "error": error,
+                "model_dependency_status": {
+                    **model_status,
+                    **{model: "skipped_or_disabled" for model in sorted(include) if model not in model_status},
+                },
+            },
+        )
         raise ValueError("benchmark config did not enable any available models")
+    model_feature_columns = {
+        model_name: list(RULE_SCORE_COLUMNS) if model_name == "grammar_rules" else list(feature_cols)
+        for model_name in models
+    }
 
     oof_rows: list[dict[str, Any]] = []
     tuning_rows: list[dict[str, Any]] = []
+    fold_warnings: list[str] = []
     model_true_pred: dict[str, tuple[list[int], list[int]]] = {
         model_name: ([], []) for model_name in models
     }
 
     for fold, (train_idx, test_idx) in enumerate(splits, start=1):
         for model_name, estimator in models.items():
+            X_model = X_rules if model_name == "grammar_rules" else X
             if estimator == "TUNED_XGBOOST":
                 model, trace = _inner_tune_xgb(
-                    X.iloc[train_idx],
+                    X_model.iloc[train_idx],
                     y[train_idx],
                     groups[train_idx],
                     random_state=random_state,
@@ -472,10 +872,18 @@ def run_grouped_benchmark(
                 tuning_rows.extend(trace)
             else:
                 model = clone(estimator)
-            model.fit(X.iloc[train_idx], y[train_idx])
-            pred = np.asarray(model.predict(X.iloc[test_idx]), dtype=int)
+            model.fit(X_model.iloc[train_idx], y[train_idx])
+            pred = np.asarray(model.predict(X_model.iloc[test_idx]), dtype=int)
             if hasattr(model, "predict_proba"):
-                proba = np.asarray(model.predict_proba(X.iloc[test_idx]))
+                raw_proba = np.asarray(model.predict_proba(X_model.iloc[test_idx]))
+                proba, alignment_warnings = _align_predict_proba(
+                    raw_proba,
+                    model,
+                    labels=labels,
+                    model_name=model_name,
+                    fold=fold,
+                )
+                fold_warnings.extend(alignment_warnings)
             else:
                 proba = np.zeros((len(test_idx), len(labels)), dtype=float)
                 proba[np.arange(len(test_idx)), pred] = 1.0
@@ -507,6 +915,15 @@ def run_grouped_benchmark(
                         "pred_probability": top1_probability,
                         "top2_probability": top2_probability,
                         "top2_margin": top1_probability - top2_probability,
+                        "probability_source": "predict_proba"
+                        if hasattr(model, "predict_proba")
+                        else "predicted_label_one_hot",
+                        "probability_calibration_status": "model_reported_uncalibrated"
+                        if hasattr(model, "predict_proba")
+                        else "not_applicable",
+                        "probability_alignment_warnings": "|".join(alignment_warnings)
+                        if hasattr(model, "predict_proba")
+                        else "",
                         **probability_row,
                     }
                 )
@@ -532,7 +949,7 @@ def run_grouped_benchmark(
                 "macro_f1": f1_score(truth_arr, pred_arr, average="macro"),
                 "weighted_f1": f1_score(truth_arr, pred_arr, average="weighted"),
                 "top2_accuracy": top2_acc,
-                "feature_count": len(feature_cols),
+                "feature_count": len(model_feature_columns[model_name]),
             }
         )
         report = classification_report(
@@ -558,7 +975,13 @@ def run_grouped_benchmark(
     per_class_metrics.to_csv(out_dir / "per_class_metrics.csv", index=False)
     oof_df.to_csv(out_dir / "oof_predictions.csv", index=False)
     tuning_trace.to_csv(out_dir / "xgboost_tuning.csv", index=False)
-    pd.DataFrame({"feature": feature_cols}).to_csv(out_dir / "feature_columns.csv", index=False)
+    pd.DataFrame(
+        [
+            {"model": model_name, "feature_set": "rules_only" if model_name == "grammar_rules" else feature_set, "feature": feature}
+            for model_name, columns in model_feature_columns.items()
+            for feature in columns
+        ]
+    ).to_csv(out_dir / "feature_columns.csv", index=False)
     for model_name, cm_df in confusion_matrices.items():
         cm_df.to_csv(out_dir / f"confusion_matrix_{model_name}.csv")
 
@@ -583,13 +1006,19 @@ def run_grouped_benchmark(
         },
         inputs={"features_csv": features_csv},
         outputs={
+            "benchmark_preflight": out_dir / "benchmark_preflight.json",
             "metrics_summary": out_dir / "metrics_summary.csv",
             "per_class_metrics": out_dir / "per_class_metrics.csv",
             "oof_predictions": out_dir / "oof_predictions.csv",
             "feature_columns": out_dir / "feature_columns.csv",
             "fold_assignments": out_dir / "fold_assignments.csv",
             "fold_label_counts": out_dir / "fold_label_counts.csv",
+            "xgboost_tuning": out_dir / "xgboost_tuning.csv",
             "benchmark_config": out_dir / "benchmark_config_resolved.yaml",
+            **{
+                f"confusion_matrix_{model_name}": out_dir / f"confusion_matrix_{model_name}.csv"
+                for model_name in confusion_matrices
+            },
         },
         metrics={
             "n_rows": int(len(df)),
@@ -599,10 +1028,13 @@ def run_grouped_benchmark(
         },
         extra={
             "labels": labels,
-            "feature_columns": feature_cols,
+            "feature_columns_by_model": model_feature_columns,
             "split_strategy": split_strategy,
+            "split_summary": split_rows,
             "fold_label_counts": fold_counts.to_dict(orient="records"),
             "benchmark_config": benchmark_config,
+            "probability_alignment_warnings": fold_warnings,
+            "model_dependency_status": model_status,
         },
     )
     write_json(out_dir / "benchmark_manifest.json", manifest)

@@ -1,0 +1,61 @@
+# Source-tree release recipe. Inputs under data/, runs/, and outputs/ are
+# generated/local artifacts; this config is not a clean-clone quickstart.
+schema: betlas.release-evidence-config.latest
+inputs:
+  features: data/processed/betlas_full_features.csv
+  benchmark_oof: runs/betlas_full_benchmark/oof_predictions.csv
+  topology: runs/readouts/topology_diagnostics_full/topology_diagnostics.csv
+outputs:
+  out_dir: runs/release_evidence_full
+  subset_dir: data/processed/release_evidence
+  case_study_doc: outputs/case_study_entries.md
+bootstrap:
+  seed: 13
+  iterations: 1000
+  ci: 0.95
+nonredundant_subsets:
+  - name: nr_s35_homology_representative
+    key_strategy: first_nonempty
+    group_columns:
+      - cath_s35_cluster_id
+      - cath_homology_code
+      - pdb_id
+  - name: nr_pdb_fold_representative
+    key_strategy: composite
+    group_columns:
+      - pdb_id
+      - fold_label_final
+  - name: nr_direct_s35_representative
+    key_strategy: first_nonempty
+    group_columns:
+      - cath_s35_cluster_id
+      - pdb_id
+    filter:
+      cath_s35_source: cath_s35
+benchmark:
+  enabled: true
+  reuse_existing: true
+  config: configs/benchmark/nonredundant_sensitivity.yaml
+  splits: 5
+  seed: 13
+ablation_oof:
+  enabled: true
+  config: configs/benchmark/full_scale_ablation.yaml
+  splits: 5
+  selected:
+    - ablation_type: drop_group_single
+      name: sheet_sequence_topology
+    - ablation_type: drop_group_single
+      name: sheet_global
+    - ablation_type: drop_group_single
+      name: composition
+    - ablation_type: drop_group_combo_2
+      name: sheet_global+sheet_sequence_topology
+    - ablation_type: drop_group_combo_3
+      name: contact_graph+sheet_global+sheet_sequence_topology
+    - ablation_type: drop_feature_single
+      name: betlas_sheet_pair_size_balance
+    - ablation_type: drop_feature_single
+      name: betlas_sheet_order_adjacent_seq_step_mean
+manual_boundary_panel:
+  max_rows: 30

@@ -8,10 +8,6 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .bootstrap import configure_thread_environment
-
-configure_thread_environment()
-
 try:
     __version__ = version("betlas")
 except PackageNotFoundError:  # pragma: no cover - editable tree before metadata exists
@@ -28,16 +24,8 @@ __all__ = [
     "DsspError",
     "DsspNotFoundError",
     "InputValidationError",
-    "LayerDiagnostic",
     "PipelineRunResult",
-    "PreparedChainPayload",
-    "ProteinLoader",
-    "PCAAligner",
-    "ProteinSlicer",
-    "ResidueRecord",
     "StructureParseError",
-    "StrandCountAnalyzer",
-    "BarrelAnalyzer",
     "StrandCountReport",
     "StrandCountResult",
     "build_config",
@@ -50,7 +38,6 @@ __all__ = [
     "__version__",
 ]
 
-from .analysis.analyzer import BarrelAnalyzer, StrandCountAnalyzer
 from .config import AppConfig, Config, build_config
 from .exceptions import (
     BetaBarrelStavesReadoutError,
@@ -61,16 +48,10 @@ from .exceptions import (
     InputValidationError,
     StructureParseError,
 )
-from .geometry.alignment import PCAAligner
-from .geometry.slicer import ProteinSlicer
-from .io.loader import ProteinLoader
 from .models import (
     AnalysisReport,
     DetectionResult,
-    LayerDiagnostic,
     PipelineRunResult,
-    PreparedChainPayload,
-    ResidueRecord,
     StrandCountReport,
     StrandCountResult,
 )

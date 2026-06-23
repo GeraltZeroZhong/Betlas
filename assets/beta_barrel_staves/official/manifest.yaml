@@ -1,0 +1,54 @@
+schema_version: betlas.asset-manifest.v1
+asset_id: betlas-beta-barrel-staves-official-v1
+asset_type: fixed_cohort_input_bundle
+readout: beta_barrel_staves
+profile: betlas_151_layer_radial16_inputs
+release_status: pending_release
+bundle: pending-local-mirror.zip
+bundle_subdir: beta_barrel_staves/official
+manifest_scope: runner_inputs_only
+generated_by:
+  - scripts/reproducibility/readout_benchmarks/beta_barrel_staves/run_betlas151_layer_radial16_official.py
+source_inputs:
+  - Betlas 151 layer/radial16 official input bundle
+files:
+  - filename: per_record_aligned_wide.csv
+    purpose: fixed-cohort aligned record table with labels and outer folds
+    byte_size: 9590
+    sha256: eaf0905258934d4fb787b321308e303bf962acbb682cbe9e94d004b7814c4023
+    download_path: beta_barrel_staves/official/per_record_aligned_wide.csv
+  - filename: feature_columns_151.csv
+    purpose: ordered Betlas 151 feature column list
+    byte_size: 4249
+    sha256: 6fa3187d9632fe59c7c567c822f856cb8032b71117d29c5074c6c9b346c4be74
+    download_path: beta_barrel_staves/official/feature_columns_151.csv
+  - filename: layer_radial16_feature_manifest.csv
+    purpose: layer/radial auxiliary feature manifest
+    byte_size: 3099
+    sha256: 39c7af34449539d22790a36889778de71f3eae0e1755737589b2c37bc1c1ea53
+    download_path: beta_barrel_staves/official/layer_radial16_feature_manifest.csv
+  - filename: layer_radial16_feature_values.csv
+    purpose: layer/radial auxiliary feature values
+    byte_size: 57786
+    sha256: d2b68936797107999b4172d341c0f2d7a51a991dd005676ebdcea96bc589551c
+    download_path: beta_barrel_staves/official/layer_radial16_feature_values.csv
+  - filename: betlas_151_chain_features.csv
+    purpose: Betlas 151 chain-level feature table
+    byte_size: 1046312
+    sha256: ccf2abfb7f6840df30c677e4fd47512a8174013dd23bd9272290d5082d01c721
+    download_path: beta_barrel_staves/official/betlas_151_chain_features.csv
+  - filename: esmc_mean_embeddings_aligned.npz
+    purpose: aligned ESM-C mean embeddings for the official cohort
+    byte_size: 1020953
+    sha256: e1da358313db21b873b3c9605e4214dfa5fbb19159b43d80e3cb3747e6295db9
+    download_path: beta_barrel_staves/official/esmc_mean_embeddings_aligned.npz
+  - filename: esmc_embedding_coverage.csv
+    purpose: per-record ESM-C embedding availability table used by the runner
+    byte_size: 28299
+    sha256: c6b866c7af620e05d106482d1d936bd34ecab90dd42e7d8fea4b6f294b71cac1
+    download_path: beta_barrel_staves/official/esmc_embedding_coverage.csv
+  - filename: README.md
+    purpose: official input bundle notes
+    byte_size: 529
+    sha256: 535a416102ce546ed9211c5d1eba0d6c6e44d3186b9e4488645cbb559ec41553
+    download_path: beta_barrel_staves/official/README.md

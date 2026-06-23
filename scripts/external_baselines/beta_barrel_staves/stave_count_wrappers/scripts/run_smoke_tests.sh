@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: run_smoke_tests.sh
+
+Run smoke checks for set up stave-count external baseline wrappers and
+write method status JSON files under runs/smoke_status by default.
+Environment: SMOKE_STATUS_DIR, PYTHON_BIN.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATUS_DIR="${SMOKE_STATUS_DIR:-$ROOT/runs/smoke_status}"
 STATUS_PYTHON="${PYTHON_BIN:-python}"

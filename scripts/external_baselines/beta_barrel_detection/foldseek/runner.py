@@ -14,7 +14,10 @@ from pathlib import Path
 
 from Bio.PDB.Polypeptide import is_aa
 
-from scripts.external_baselines.beta_barrel_detection.foldseek.structures import _parse_structure, discover_structure_files
+from scripts.external_baselines.beta_barrel_detection.foldseek.structures import (
+    _parse_structure,
+    discover_structure_files,
+)
 
 BASELINE_NAME = "foldseek_tmalign_structure_search"
 DEFAULT_ALIGNMENT_TYPE = 1
