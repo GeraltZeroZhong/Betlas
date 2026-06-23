@@ -29,17 +29,66 @@ def make_grouped_splits(
 
     label_counts = Counter(y_arr.tolist())
     min_label_count = min(label_counts.values()) if label_counts else 0
-    stratified_splits = min(requested, min_label_count)
-    if StratifiedGroupKFold is not None and stratified_splits >= 2:
-        splitter = StratifiedGroupKFold(
-            n_splits=stratified_splits,
-            shuffle=True,
-            random_state=random_state,
-        )
-        return list(splitter.split(X, y_arr, groups_arr)), "stratified_group_kfold", stratified_splits
+    required_labels = set(label_counts)
 
-    splitter = GroupKFold(n_splits=requested)
-    return list(splitter.split(X, y_arr, groups_arr)), "group_kfold", requested
+    def missing_coverage(
+        splits: list[tuple[np.ndarray, np.ndarray]],
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for fold, (train_idx, test_idx) in enumerate(splits, start=1):
+            for split_name, idx in (("train", train_idx), ("test", test_idx)):
+                present = set(y_arr[idx].tolist())
+                missing = sorted(required_labels - present)
+                if missing:
+                    rows.append({"fold": fold, "split": split_name, "missing_classes": missing})
+        return rows
+
+    def complete_or_none(candidate: int) -> tuple[list[tuple[np.ndarray, np.ndarray]], str] | None:
+        if StratifiedGroupKFold is not None and candidate <= min_label_count:
+            splitter = StratifiedGroupKFold(
+                n_splits=candidate,
+                shuffle=True,
+                random_state=random_state,
+            )
+            strategy = "stratified_group_kfold"
+        else:
+            splitter = GroupKFold(n_splits=candidate)
+            strategy = "group_kfold"
+        splits = list(splitter.split(X, y_arr, groups_arr))
+        if not missing_coverage(splits):
+            return splits, strategy
+        return None
+
+    first_missing: list[dict[str, Any]] = []
+    for candidate in range(requested, 1, -1):
+        result = complete_or_none(candidate)
+        if result is not None:
+            splits, strategy = result
+            if candidate < requested:
+                strategy = f"{strategy}_class_complete_downshifted_from_{requested}"
+            return splits, strategy, candidate
+        if not first_missing:
+            if StratifiedGroupKFold is not None and candidate <= min_label_count:
+                probe = list(
+                    StratifiedGroupKFold(
+                        n_splits=candidate,
+                        shuffle=True,
+                        random_state=random_state,
+                    ).split(X, y_arr, groups_arr)
+                )
+            else:
+                probe = list(GroupKFold(n_splits=candidate).split(X, y_arr, groups_arr))
+            first_missing = missing_coverage(probe)
+
+    examples = "; ".join(
+        f"fold {row['fold']} {row['split']} missing {row['missing_classes']}"
+        for row in first_missing[:5]
+    )
+    more = f"; plus {len(first_missing) - 5} more" if len(first_missing) > 5 else ""
+    raise ValueError(
+        "grouped cross-validation cannot produce train/test folds with complete class coverage "
+        f"for observed labels {sorted(required_labels)} at any split count >=2: {examples}{more}"
+    )
 
 
 def fold_label_counts(

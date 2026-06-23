@@ -77,6 +77,7 @@ def _prepare_config_state(cfg: AppConfig) -> dict[str, object]:
         "cache_version": PREPARE_CACHE_VERSION,
         "betlas.readouts.beta_barrel_staves_version": _package_version("betlas"),
         "biopython_version": _package_version("biopython"),
+        "chain_id": str(getattr(cfg.input, "chain_id", "") or ""),
         "min_chain_residues": int(cfg.input.min_chain_residues),
         "dssp_bin_path": str(cfg.runtime.dssp_bin_path or ""),
         "dssp_binary_state": _path_state(cfg.runtime.dssp_bin_path),

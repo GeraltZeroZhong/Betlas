@@ -47,9 +47,9 @@ from .analyzer import BarrelAnalyzer
 from .chain_slices import extract_chain_slices
 from .config import AppConfig, Config, build_config
 from .exceptions import (
+    BetlasBetaError,
     ChainNotFoundError,
     ConfigValidationError,
-    BetlasBetaError,
     DsspError,
     DsspNotFoundError,
     InputValidationError,

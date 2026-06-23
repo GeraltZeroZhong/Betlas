@@ -103,17 +103,142 @@ def parse_residue_ranges(chopping: str, fallback_chain_id: str = "") -> list[tup
         part = part.strip()
         if not part:
             continue
-        match = re.match(r"^\s*(-?\d+)[A-Za-z]?\s*-\s*(-?\d+)[A-Za-z]?\s*:([^,\s]+)\s*$", part)
+        match = re.match(
+            r"^\s*(?:(?P<chain_first>[^,:\s]+)\s*:)?"
+            r"(?P<start>-?\d+)(?P<start_ins>[A-Za-z]?)\s*-\s*"
+            r"(?P<end>-?\d+)(?P<end_ins>[A-Za-z]?)"
+            r"(?:\s*:\s*(?P<chain_last>[^,\s]+))?\s*$",
+            part,
+        )
         if not match:
-            continue
-        start = int(match.group(1))
-        end = int(match.group(2))
-        chain = match.group(3) or fallback_chain_id
+            raise ValueError(
+                f"invalid residue range {part!r}; use '10-180:A', 'A:10-180', or '10-180' with a chain id"
+            )
+        if match.group("start_ins") or match.group("end_ins"):
+            raise ValueError(
+                f"unsupported insertion-code residue range {part!r}; Betlas currently supports "
+                "numeric author residue ranges only, such as '10-180:A' or 'A:10-180'"
+            )
+        start = int(match.group("start"))
+        end = int(match.group("end"))
+        chain_first = match.group("chain_first")
+        chain_last = match.group("chain_last")
+        if chain_first and chain_last and chain_first != chain_last:
+            raise ValueError(
+                f"residue range {part!r} has inconsistent chain ids {chain_first!r} and {chain_last!r}"
+            )
+        chain = chain_last or chain_first or fallback_chain_id
+        if not chain:
+            raise ValueError(f"residue range {part!r} does not specify a chain id")
         if start <= end:
             ranges.append((chain, start, end))
         else:
             ranges.append((chain, end, start))
     return ranges
+
+
+def is_mmcif_path(path: str | Path) -> bool:
+    """Return whether a path has a supported mmCIF suffix."""
+
+    name = Path(path).name.lower()
+    return name.endswith((".cif", ".mmcif", ".cif.gz", ".mmcif.gz"))
+
+
+def available_auth_chain_ids(path: Path) -> tuple[str, ...]:
+    """Return author chain ids present in the atom table of an mmCIF file."""
+
+    mmcif = read_mmcif_dict_for_geometry(path)
+    return tuple(sorted({chain for chain in _list_value(mmcif, "_atom_site.auth_asym_id") if chain}))
+
+
+def inspect_mmcif_chains(path: Path) -> list[dict[str, object]]:
+    """Return chain-level mmCIF metadata relevant to Betlas public workflows."""
+
+    mmcif = read_mmcif_dict_for_geometry(path)
+    group = _list_value(mmcif, "_atom_site.group_PDB")
+    auth_asym = _list_value(mmcif, "_atom_site.auth_asym_id")
+    label_asym = _list_value(mmcif, "_atom_site.label_asym_id")
+    auth_seq = _list_value(mmcif, "_atom_site.auth_seq_id")
+    label_atom = _list_value(mmcif, "_atom_site.label_atom_id")
+    auth_atom = _list_value(mmcif, "_atom_site.auth_atom_id")
+    comp_id = _list_value(mmcif, "_atom_site.label_comp_id")
+    ins_codes = _list_value(mmcif, "_atom_site.pdbx_PDB_ins_code")
+
+    n = len(auth_asym)
+    if not group or len(group) != n:
+        group = ["ATOM"] * n
+    if not label_asym or len(label_asym) != n:
+        label_asym = [""] * n
+    if not auth_atom or len(auth_atom) != n:
+        auth_atom = label_atom
+    if not ins_codes or len(ins_codes) != n:
+        ins_codes = ["?"] * n
+
+    residues_by_chain: dict[str, set[tuple[int, str]]] = defaultdict(set)
+    labels_by_chain: dict[str, set[str]] = defaultdict(set)
+    insertion_counts: dict[str, int] = defaultdict(int)
+    nonpolymer_counts: dict[str, int] = defaultdict(int)
+    for i in range(n):
+        chain = auth_asym[i]
+        if not chain:
+            continue
+        labels_by_chain[chain].add(label_asym[i])
+        atom_name = (auth_atom[i] or label_atom[i]).strip().upper()
+        residue_name = comp_id[i].strip().upper() if i < len(comp_id) else ""
+        if group[i] != "ATOM" or residue_name not in STANDARD_AMINO_ACIDS:
+            nonpolymer_counts[chain] += 1
+            continue
+        if atom_name != "CA":
+            continue
+        seq_id = _safe_int(auth_seq[i])
+        if seq_id is None:
+            continue
+        ins_code = _normalize_ins_code(ins_codes[i])
+        residues_by_chain[chain].add((seq_id, ins_code))
+        if ins_code:
+            insertion_counts[chain] += 1
+
+    sheet_chains = set(_list_value(mmcif, "_struct_sheet_range.beg_auth_asym_id")) | set(
+        _list_value(mmcif, "_struct_sheet_range.end_auth_asym_id")
+    )
+    helix_chains = set(_list_value(mmcif, "_struct_conf.beg_auth_asym_id")) | set(
+        _list_value(mmcif, "_struct_conf.end_auth_asym_id")
+    )
+    all_chains = sorted(set(auth_asym) | set(residues_by_chain) | sheet_chains | helix_chains)
+    rows: list[dict[str, object]] = []
+    for chain in all_chains:
+        if not chain:
+            continue
+        residue_count = len(residues_by_chain.get(chain, set()))
+        has_sheet = chain in sheet_chains
+        has_conf = chain in helix_chains
+        hints: list[str] = []
+        if residue_count == 0:
+            hints.append("no_standard_ca_residues")
+        if has_sheet and insertion_counts.get(chain, 0):
+            hints.append("feature_extraction_blocked_insertion_codes")
+            hints.append("slice_blocked_insertion_codes")
+        elif has_sheet:
+            hints.append("feature_extraction_supported")
+            hints.append("slice_supported")
+        else:
+            hints.append("no_sheet_annotations")
+            hints.append("readout_inputs_supported")
+        if insertion_counts.get(chain, 0):
+            hints.append("contains_insertion_codes")
+        rows.append(
+            {
+                "auth_chain_id": chain,
+                "label_chain_ids": sorted(label for label in labels_by_chain.get(chain, set()) if label),
+                "standard_ca_residue_count": int(residue_count),
+                "sheet_annotation_available": bool(has_sheet),
+                "helix_conf_annotation_available": bool(has_conf),
+                "insertion_code_ca_count": int(insertion_counts.get(chain, 0)),
+                "nonpolymer_atom_rows": int(nonpolymer_counts.get(chain, 0)),
+                "workflow_hints": hints,
+            }
+        )
+    return rows
 
 
 def _in_ranges(chain_id: str, auth_seq_id: int, ranges: list[tuple[str, int, int]]) -> bool:
@@ -239,14 +364,26 @@ def _parse_beta_segments(
     end_chains = _list_value(mmcif, "_struct_sheet_range.end_auth_asym_id")
     beg_seq = _list_value(mmcif, "_struct_sheet_range.beg_auth_seq_id")
     end_seq = _list_value(mmcif, "_struct_sheet_range.end_auth_seq_id")
+    beg_ins = _list_value(mmcif, "_struct_sheet_range.pdbx_beg_PDB_ins_code")
+    end_ins = _list_value(mmcif, "_struct_sheet_range.pdbx_end_PDB_ins_code")
+    if not beg_ins or len(beg_ins) != len(beg_seq):
+        beg_ins = ["?"] * len(beg_seq)
+    if not end_ins or len(end_ins) != len(end_seq):
+        end_ins = ["?"] * len(end_seq)
     senses = _sheet_sense_by_pair(mmcif)
     ranges = parse_residue_ranges(domain.residue_ranges, fallback_chain_id=domain.chain_id)
     segments: list[SecondaryStructureElement] = []
-    for idx, (sheet_id, range_id, beg_chain, end_chain, beg, end) in enumerate(
-        zip(sheet_ids, range_ids, beg_chains, end_chains, beg_seq, end_seq, strict=False)
+    for idx, (sheet_id, range_id, beg_chain, end_chain, beg, end, beg_i, end_i) in enumerate(
+        zip(sheet_ids, range_ids, beg_chains, end_chains, beg_seq, end_seq, beg_ins, end_ins, strict=False)
     ):
         if beg_chain != domain.chain_id or end_chain != domain.chain_id:
             continue
+        if _normalize_ins_code(beg_i) or _normalize_ins_code(end_i):
+            raise ValueError(
+                "Betlas grammar/slice extraction currently supports numeric author residue "
+                "sheet ranges only; mmCIF sheet range "
+                f"{sheet_id}:{range_id} uses insertion-code boundaries"
+            )
         start = _safe_int(beg)
         stop = _safe_int(end)
         if start is None or stop is None:
@@ -288,15 +425,26 @@ def _parse_helices(
     end_chains = _list_value(mmcif, "_struct_conf.end_auth_asym_id")
     beg_seq = _list_value(mmcif, "_struct_conf.beg_auth_seq_id")
     end_seq = _list_value(mmcif, "_struct_conf.end_auth_seq_id")
+    beg_ins = _list_value(mmcif, "_struct_conf.pdbx_beg_PDB_ins_code")
+    end_ins = _list_value(mmcif, "_struct_conf.pdbx_end_PDB_ins_code")
+    if not beg_ins or len(beg_ins) != len(beg_seq):
+        beg_ins = ["?"] * len(beg_seq)
+    if not end_ins or len(end_ins) != len(end_seq):
+        end_ins = ["?"] * len(end_seq)
     ranges = parse_residue_ranges(domain.residue_ranges, fallback_chain_id=domain.chain_id)
     helices: list[SecondaryStructureElement] = []
-    for conf_id, conf_type, beg_chain, end_chain, beg, end in zip(
-        conf_ids, conf_types, beg_chains, end_chains, beg_seq, end_seq, strict=False
+    for conf_id, conf_type, beg_chain, end_chain, beg, end, beg_i, end_i in zip(
+        conf_ids, conf_types, beg_chains, end_chains, beg_seq, end_seq, beg_ins, end_ins, strict=False
     ):
         if not conf_type.upper().startswith("HELX"):
             continue
         if beg_chain != domain.chain_id or end_chain != domain.chain_id:
             continue
+        if _normalize_ins_code(beg_i) or _normalize_ins_code(end_i):
+            raise ValueError(
+                "Betlas grammar/slice extraction currently supports numeric author residue "
+                f"helix ranges only; mmCIF struct_conf {conf_id} uses insertion-code boundaries"
+            )
         start = _safe_int(beg)
         stop = _safe_int(end)
         if start is None or stop is None:
@@ -335,6 +483,13 @@ def build_structure_geometry(
     warnings: list[str] = []
     if not residues:
         warnings.append("no_selected_ca_residues")
+    insertion_residue = next((residue for residue in residues if residue.insertion_code), None)
+    if insertion_residue is not None:
+        raise ValueError(
+            "Betlas grammar/slice extraction currently supports numeric author residue IDs "
+            "without insertion codes; selected chain contains insertion-coded residue "
+            f"{insertion_residue.chain_id}:{insertion_residue.auth_seq_id}:{insertion_residue.insertion_code}"
+        )
 
     beta_segments = _parse_beta_segments(mmcif, residues, domain)
     helices = _parse_helices(mmcif, residues, domain)

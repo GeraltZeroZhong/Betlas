@@ -51,23 +51,23 @@ When starting from PDB/CIF/mmCIF query structures, generate one single-chain PDB
 record per analyzable chain and run the baseline:
 
 ```bash
-python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py \
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py \
   path/to/query_structures \
-  --out-dir eval_outputs/foldseek_tmalign_structure_search \
+  --out-dir runs/external_baselines/foldseek_tmalign_structure_search \
   --target-db /path/to/ref_barrel_db \
-  --out eval_outputs/foldseek_tmalign_structure_search.csv
+  --out runs/external_baselines/foldseek_tmalign_structure_search.csv
 ```
 
 You can also point the adapter at reference structures directly and let it run
 `foldseek createdb` in the working directory:
 
 ```bash
-python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py \
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py \
   path/to/query_structures \
-  --out-dir eval_outputs/foldseek_tmalign_structure_search \
+  --out-dir runs/external_baselines/foldseek_tmalign_structure_search \
   --reference-structures path/to/reference_barrel_chains \
   --create-index \
-  --out eval_outputs/foldseek_tmalign_structure_search.csv
+  --out runs/external_baselines/foldseek_tmalign_structure_search.csv
 ```
 
 The generator writes:
@@ -77,9 +77,9 @@ The generator writes:
 - `query_chains/residue_mapping.csv`: chain-file residue index to source residue
 - `foldseek_work/foldseek_hits.tsv`: raw Foldseek TSV before normalization
 
-For smoke tests, this repository uses a tiny fake Foldseek runner under
-`scripts/external_baselines/beta_barrel_detection/foldseek_smoke/` so the adapter can be tested without
-installing or vendoring GPL code.
+For smoke tests, create a tiny local Foldseek-compatible executable under
+`runs/external_baselines/foldseek_smoke/` and pass its path with `--foldseek`.
+Generated smoke files should stay under `runs/`.
 
 ## Betlas beta-barrel detection Dataset Evaluation
 
@@ -88,10 +88,10 @@ writes both raw-label and manual-reviewed outputs. Manual relabeling is applied
 only when `--manual-manifest` is explicitly provided:
 
 ```bash
-python scripts/external_baselines/beta_barrel_detection/foldseek/evaluate_dataset.py \
+PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/evaluate_dataset.py \
   --positive-dir data/positive \
   --negative-dir data/negative \
-  --out-dir eval_outputs/foldseek_tmalign_structure_search_YYYYMMDD_HHMMSS \
+  --out-dir runs/external_baselines/foldseek_tmalign_structure_search_YYYYMMDD_HHMMSS \
   --manual-manifest path/to/manual_review_manifest.csv \
   --foldseek tools/foldseek/bin/foldseek \
   --tag YYYYMMDD_HHMMSS

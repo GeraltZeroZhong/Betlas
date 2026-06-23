@@ -21,6 +21,17 @@ _DEFAULT_CRYST1 = (
 )
 
 
+def _format_structure_parse_error(file_path: str, error: Exception) -> str:
+    detail = str(error)
+    if "_atom_site." in detail:
+        return (
+            f"Failed to parse structure {file_path}: input mmCIF lacks atom-site fields "
+            "required by Biopython/DSSP readouts. The packaged mini.cif fixture is for "
+            f"grammar/slice smoke tests only. Parser detail: {detail}"
+        )
+    return f"Failed to parse structure {file_path}: {detail}"
+
+
 # -------------------------
 # Utilities: element / chain
 # -------------------------
@@ -325,7 +336,7 @@ class ProteinLoader:
                         except OSError:
                             pass
 
-            raise StructureParseError(f"Failed to parse structure {self.file_path}: {e}") from None
+            raise StructureParseError(_format_structure_parse_error(self.file_path, e)) from None
         finally:
             if input_tmp and os.path.exists(input_tmp):
                 try:

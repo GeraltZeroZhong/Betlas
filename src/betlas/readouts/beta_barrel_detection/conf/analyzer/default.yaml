@@ -7,7 +7,7 @@ fit:
   min_inlier_frac: 0.60
   least_squares:
     # OpenCV's fitEllipseDirect() is now the default fitter.
-    # Keep these legacy keys for backward-compatible config parsing; only
+    # Keep these compatibility keys for existing config parsing; only
     # `f_scale` still affects the residual-derived inlier band.
     method: trf
     loss: soft_l1
@@ -44,7 +44,7 @@ decision:
   near_miss_rescue:
     enabled: false
     # Near-miss rescues are available for calibrated experiments, but are off
-    # in the default publication profile because they can bypass the main
+    # in the default release profile because they can bypass the main
     # barrel-valid threshold.
     # Disabled by default because this proxy-only rescue can otherwise classify
     # chains with zero ellipse-scored layers as BARREL.

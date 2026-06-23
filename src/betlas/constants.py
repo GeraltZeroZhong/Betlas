@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .schema import BETLAS_PREFIX
+
 FOLD_LABELS: tuple[str, ...] = (
     "beta_barrel",
     "beta_prism",
@@ -12,7 +14,7 @@ FOLD_LABELS: tuple[str, ...] = (
     "tim_like_beta_alpha_barrel",
 )
 
-DIAGNOSTIC_PREFIX = "cz_"
+DIAGNOSTIC_PREFIX = BETLAS_PREFIX
 
 DEFAULT_CATH_DIR = Path("data/external/cath")
 DEFAULT_MMCIF_DIR = Path("data/external/pdb_mmcif")

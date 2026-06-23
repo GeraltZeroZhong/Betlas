@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: run_polarbearal.sh [input.pdb] [output_dir]
+
+Build if needed and run the PolarBearal3 command-line shim on one structure.
+Environment: DOTNET_BIN, DOTNET_ROOT, POLARBEARAL_REBUILD,
+POLARBEARAL_STDOUT, POLARBEARAL_STDERR.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOL="$ROOT/tools/PolarBearal3"
 MONO_ENV="$ROOT/.conda/polarbearal"

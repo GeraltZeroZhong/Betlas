@@ -39,6 +39,7 @@ class RuntimeConfig:
 class InputConfig:
     path: str = DEFAULT_INPUT_PATH
     allowed_suffixes: list[str] = field(default_factory=lambda: list(DEFAULT_ALLOWED_SUFFIXES))
+    chain_id: str = ""
     min_chain_residues: int = DEFAULT_MIN_CHAIN_RESIDUES
     min_sheet_residues: int = DEFAULT_MIN_SHEET_RESIDUES
     min_informative_slices: int = DEFAULT_MIN_INFORMATIVE_SLICES
@@ -227,7 +228,7 @@ class AppConfig:
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
 
 
-LEGACY_OVERRIDE_PATHS = {
+COMPAT_OVERRIDE_PATHS = {
     "DSSP_BIN_PATH": "runtime.dssp_bin_path",
     "PREPARE_BATCH_SIZE": "runtime.prepare_batch_size",
     "ANALYSIS_BATCH_SIZE": "runtime.analysis_batch_size",
@@ -275,7 +276,7 @@ LEGACY_OVERRIDE_PATHS = {
 
 
 class Config:
-    """Legacy flat configuration shim kept for backward compatibility."""
+    """Flat configuration shim kept for compatibility."""
 
 
 def _register_schema() -> None:
@@ -307,7 +308,7 @@ def normalize_overrides(overrides: Mapping[str, Any] | list[str] | None = None) 
 
     normalized: list[str] = []
     for key, value in overrides.items():
-        target_key = LEGACY_OVERRIDE_PATHS.get(key, key)
+        target_key = COMPAT_OVERRIDE_PATHS.get(key, key)
         normalized.append(f"{target_key}={_to_override_value(value)}")
     return normalized
 
@@ -334,7 +335,7 @@ def build_config(
     if not isinstance(app_cfg, AppConfig):
         raise TypeError("Hydra returned an unexpected configuration object.")
     validate_config(app_cfg)
-    sync_legacy_config(app_cfg)
+    sync_compat_config(app_cfg)
     return app_cfg
 
 
@@ -619,16 +620,16 @@ def validate_config(cfg: AppConfig) -> None:
     )
 
 
-def sync_legacy_config(cfg: AppConfig) -> None:
-    for legacy_name, path in LEGACY_OVERRIDE_PATHS.items():
+def sync_compat_config(cfg: AppConfig) -> None:
+    for compat_name, path in COMPAT_OVERRIDE_PATHS.items():
         value = cfg
         for part in path.split("."):
             value = getattr(value, part)
-        setattr(Config, legacy_name, value)
+        setattr(Config, compat_name, value)
 
 
 def default_config() -> AppConfig:
     return build_config()
 
 
-sync_legacy_config(AppConfig())
+sync_compat_config(AppConfig())

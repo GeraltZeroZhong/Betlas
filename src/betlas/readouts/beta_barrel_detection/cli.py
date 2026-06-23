@@ -71,10 +71,22 @@ def _recover_positional_path(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        prog="betlas",
+        prog="betlas readout beta-barrel-detection",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Detect beta-barrel-like protein chains from PDB/mmCIF inputs and write a CSV "
             "summary. Advanced KEY=VALUE arguments are treated as Hydra overrides."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  betlas readout beta-barrel-detection structure.cif --out runs/detection.csv\n"
+            "  betlas readout beta-barrel-detection structure.cif --chain A --out runs/detection_A.csv\n"
+            "  betlas readout beta-barrel-detection structures/ --workers 8 --prep 4 --out runs/detection.csv\n"
+            "  betlas readout beta-barrel-detection input.path=structures/ output.csv=runs/detection.csv runtime.dssp_bin_path=mkdssp\n"
+            "  betlas readout beta-barrel-detection --check-env\n\n"
+            "Output CSV: one row per analyzed chain with beta-barrel-like geometry decision, heuristic score, slice, geometry, and runtime-status columns.\n"
+            "DSSP: pass runtime.dssp_bin_path=/path/to/mkdssp or use --check-env to verify availability.\n"
+            "Hydra overrides: KEY=VALUE tokens are forwarded after CLI flags and can set nested config values."
         ),
     )
     parser.add_argument(
@@ -104,6 +116,11 @@ def main(argv: list[str] | None = None) -> None:
         "-o",
         default=None,
         help="Write results CSV to this path.",
+    )
+    parser.add_argument(
+        "--chain",
+        default=None,
+        help="Analyze only this chain id. By default, all chains in each input structure are analyzed.",
     )
     parser.add_argument(
         "--check-env",
@@ -139,13 +156,20 @@ def main(argv: list[str] | None = None) -> None:
 
         cfg = build_config(hydra_overrides)
         if __package__ in {None, ""}:  # pragma: no cover - path execution convenience
-            from betlas.readouts.beta_barrel_detection.pipeline import apply_runtime_overrides, run_pipeline_result
+            from betlas.readouts.beta_barrel_detection.pipeline import (
+                apply_runtime_overrides,
+                run_pipeline_result,
+            )
         else:
-            from .pipeline import apply_runtime_overrides, run_pipeline_result
+            from .pipeline import (
+                apply_runtime_overrides,
+                run_pipeline_result,
+            )
 
         cfg = apply_runtime_overrides(
             cfg,
             input_path=args.path,
+            chain_id=args.chain,
             workers=args.workers,
             prepare_workers=args.prepare_workers,
             out_csv=args.out,
@@ -162,7 +186,13 @@ def main(argv: list[str] | None = None) -> None:
                 raise SystemExit(2)
             return
 
-        run_pipeline_result(cfg, write_csv=True, print_summary=True, strict_input=True)
+        run_pipeline_result(
+            cfg,
+            write_csv=True,
+            print_summary=True,
+            show_progress=sys.stderr.isatty(),
+            strict_input=True,
+        )
     except (
         BetlasBetaError,
         FileNotFoundError,

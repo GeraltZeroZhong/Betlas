@@ -19,6 +19,17 @@ _DEFAULT_CRYST1 = (
 )
 
 
+def _format_structure_parse_error(file_path: str, error: Exception) -> str:
+    detail = str(error)
+    if "_atom_site." in detail:
+        return (
+            f"Failed to parse structure {file_path}: input mmCIF lacks atom-site fields "
+            "required by Biopython/DSSP readouts. The packaged mini.cif fixture is for "
+            f"grammar/slice smoke tests only. Parser detail: {detail}"
+        )
+    return f"Failed to parse structure {file_path}: {detail}"
+
+
 # -------------------------
 # Utilities: element / chain
 # -------------------------
@@ -125,7 +136,15 @@ def _decompress_gzip_to_temp_if_needed(in_path: str) -> str | None:
         if handle.read(2) != b"\x1f\x8b":
             return None
 
-    suffix = os.path.splitext(in_path)[1] or ".pdb"
+    lower_name = os.path.basename(in_path).lower()
+    if lower_name.endswith(".pdb.gz"):
+        suffix = ".pdb"
+    elif lower_name.endswith(".cif.gz"):
+        suffix = ".cif"
+    elif lower_name.endswith(".mmcif.gz"):
+        suffix = ".mmcif"
+    else:
+        suffix = os.path.splitext(in_path)[1] or ".pdb"
     fd, out_path = tempfile.mkstemp(suffix=suffix)
     with gzip.open(in_path, "rb") as source, os.fdopen(fd, "wb") as target:
         while True:
@@ -223,7 +242,7 @@ class ProteinLoader:
                         except OSError:
                             pass
 
-            raise StructureParseError(f"Failed to parse structure {self.file_path}: {e}") from None
+            raise StructureParseError(_format_structure_parse_error(self.file_path, e)) from None
         finally:
             if input_tmp and os.path.exists(input_tmp):
                 try:

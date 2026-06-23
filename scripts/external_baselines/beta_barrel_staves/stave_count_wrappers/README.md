@@ -74,13 +74,13 @@ main branch also needs a compile-only missing `break;` fix in one unused menu
 branch; the wrapper applies that before build and does not change the strand
 assignment code path.
 
-For NMR PDB entries, the gold runner keeps only the first `MODEL ... ENDMDL`
-block before chain filtering. PolarBearal3's own parser stops at `ENDMDL`; this
-preserves that intended behavior and avoids counting all NMR models as one
-chain.
+For NMR PDB entries, the reference-cohort runner keeps only the first
+`MODEL ... ENDMDL` block before chain filtering. PolarBearal3's own parser stops
+at `ENDMDL`; this preserves that intended behavior and avoids counting all NMR
+models as one chain.
 
-Gold dataset runs for profile-based methods are reproducible, but the bundled
-default creates PSI-BLAST profiles from the local gold FASTA only. That is useful
-for auditing wrapper execution and file formats; it is not a complete
+Reference-cohort runs for profile-based methods are reproducible, but the bundled
+default creates PSI-BLAST profiles from the local reference FASTA only. That is
+useful for auditing wrapper execution and file formats; it is not a complete
 NR/UniRef-style profile benchmark. For a full metric comparison, set up and
 document a frozen external BLAST database and rerun the same wrappers.

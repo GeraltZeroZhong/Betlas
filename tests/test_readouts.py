@@ -1,14 +1,44 @@
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import pandas as pd
+import pytest
 
+import betlas.readouts.beta_barrel_detection.cli as detection_cli
+import betlas.readouts.beta_barrel_detection.pipeline as detection_pipeline
+import betlas.readouts.beta_barrel_staves.cli as staves_cli
 from betlas.ml.benchmark import numeric_feature_columns
 from betlas.readouts import get_readout, list_readouts
-from betlas.readouts.beta_barrel_staves import StrandCountAnalyzer, build_config
+from betlas.readouts.beta_barrel_detection.config import build_config as build_detection_config
+from betlas.readouts.beta_barrel_detection.pipeline import discover_input_files
+from betlas.readouts.beta_barrel_detection.pipeline_workers import analyze_chain_payload
+from betlas.readouts.beta_barrel_detection.prepare_cache import (
+    _normalize_payloads,
+    prepare_cache_path,
+    store_prepare_payloads,
+)
+from betlas.readouts.beta_barrel_detection.results import (
+    write_results_csv as write_detection_results_csv,
+)
+from betlas.readouts.beta_barrel_staves import (
+    StrandCountAnalyzer,
+    build_config,
+    count_beta_barrel_staves,
+    count_strands,
+)
+from betlas.readouts.beta_barrel_staves.cli import _apply_barrel_decisions, _load_barrel_decisions
 from betlas.readouts.beta_barrel_staves.config import AnalyzerConfig
-from betlas.readouts.topology_diagnostics import compute_topology_diagnostics
+from betlas.readouts.beta_barrel_staves.exceptions import DsspNotFoundError
+from betlas.readouts.beta_barrel_staves.runtime import find_dssp_binary, require_dssp_binary
+from betlas.readouts.topology_diagnostics import (
+    compute_topology_diagnostics,
+    run_topology_diagnostics,
+)
+from betlas.readouts.topology_diagnostics.cli import main as topology_diagnostics_cli
+from betlas.specs import list_readout_column_specs
 
 
 def _ring_layer(count: int, *, missing: set[int] | None = None) -> list[tuple[float, float, float, float]]:
@@ -58,12 +88,12 @@ def test_readout_registry_exposes_beta_barrel_staves():
     assert names == [
         "beta-barrel-detection",
         "beta-barrel-staves",
-        "bfvd-viral-beta-fold-scan",
         "fold-continuous-scores",
         "mixed-topology",
         "topology-ambiguity",
         "topology-diagnostics",
     ]
+    assert "bfvd-viral-beta-fold-scan" not in names
     assert get_readout("beta-barrel-detection").summary.startswith("Betlas native")
     assert get_readout("beta-barrel-staves").summary.startswith("Secondary readout")
     assert get_readout("topology-ambiguity").summary.startswith("Boundary-region ambiguity")
@@ -75,6 +105,88 @@ def test_beta_barrel_staves_config_defaults_are_betlas_owned():
     assert cfg.output.csv_path == "beta_barrel_staves_results.csv"
     assert cfg.barrel_gate.enabled is False
     assert cfg.analyzer.rules.barrel_wall_graph.enabled is True
+
+
+def test_count_beta_barrel_staves_python_api_requires_gate_or_explicit_ungated() -> None:
+    with pytest.raises(ValueError, match="requires barrel_decisions"):
+        count_beta_barrel_staves("structure.cif", write_csv=False, print_summary=False)
+
+
+def test_beta_barrel_staves_compat_api_requires_explicit_ungated() -> None:
+    with pytest.raises(ValueError, match="allow_ungated=True"):
+        count_strands("structure.cif", write_csv=False, print_summary=False)
+
+
+def test_beta_barrel_detection_discovers_compressed_structure_suffixes(tmp_path: Path) -> None:
+    for name in ["a.pdb.gz", "b.cif.gz", "c.mmcif.gz", "ignored.txt"]:
+        (tmp_path / name).write_text("", encoding="utf-8")
+
+    files = discover_input_files(
+        str(tmp_path),
+        [".pdb", ".cif", ".mmcif", ".pdb.gz", ".cif.gz", ".mmcif.gz"],
+        strict=True,
+    )
+
+    assert [Path(path).name for path in files] == ["a.pdb.gz", "b.cif.gz", "c.mmcif.gz"]
+    assert discover_input_files(str(tmp_path / "a.pdb.gz"), [".pdb.gz"], strict=True) == [
+        str(tmp_path / "a.pdb.gz")
+    ]
+
+
+def test_beta_barrel_detection_reports_dssp_error_before_sheet_prefilter() -> None:
+    cfg = build_detection_config([])
+    residues = [
+        {"coord": (float(index), 0.0, 0.0), "is_sheet": False}
+        for index in range(int(cfg.input.min_chain_residues) + 1)
+    ]
+
+    row = analyze_chain_payload(
+        {
+            "filename": "failed.cif",
+            "source_path": "/tmp/failed.cif",
+            "chain": "A",
+            "dssp_error": "DSSP failed for failed.cif: missing executable",
+            "residues_data": residues,
+        },
+        cfg,
+    )
+
+    assert row["result"] == "ERROR"
+    assert row["result_stage"] == "dssp"
+    assert "DSSP failed" in row["reason"]
+
+
+def test_beta_barrel_detection_prepare_cache_preserves_or_skips_dssp_errors(tmp_path: Path) -> None:
+    cfg = build_detection_config([])
+    cfg.runtime.prepare_cache_enabled = True
+    cfg.runtime.prepare_cache_dir = str(tmp_path / "cache")
+    structure = tmp_path / "failed.cif"
+    structure.write_text("data_failed\n", encoding="utf-8")
+    payload = {
+        "filename": "failed.cif",
+        "source_path": str(structure),
+        "chain": "A",
+        "dssp_status": "error",
+        "dssp_error": "DSSP failed",
+        "residues_data": [
+            {
+                "coord": (0.0, 0.0, 0.0),
+                "is_sheet": False,
+                "chain": "A",
+                "resseq": 1,
+                "icode": "",
+                "hetfield": " ",
+            }
+        ],
+    }
+
+    normalized = _normalize_payloads([payload])
+    assert normalized is not None
+    assert normalized[0]["dssp_status"] == "error"
+    assert normalized[0]["dssp_error"] == "DSSP failed"
+
+    store_prepare_payloads(str(structure), cfg, [payload])
+    assert not prepare_cache_path(str(structure), cfg).exists()
 
 
 def test_beta_barrel_staves_readout_counts_persistent_ring():
@@ -109,43 +221,344 @@ def test_beta_barrel_staves_readout_filters_inner_plug_points():
     assert report["radial_outlier_points"] == 30
 
 
+def test_staves_barrel_decisions_require_source_path_and_do_not_basename_match(tmp_path: Path) -> None:
+    decisions_csv = tmp_path / "decisions.csv"
+    source_a = tmp_path / "a" / "same.cif"
+    source_b = tmp_path / "b" / "same.cif"
+    decisions_csv.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "filename": "same.cif",
+                "source_path": str(source_a),
+                "chain": "A",
+                "result": "BARREL",
+                "decision_score": 0.9,
+            }
+        ]
+    ).to_csv(decisions_csv, index=False)
+
+    decisions = _load_barrel_decisions(str(decisions_csv))
+    rows = [
+        {
+            "filename": "same.cif",
+            "source_path": str(source_b),
+            "chain": "A",
+            "result": "COUNTED",
+            "strand_count": 8,
+            "confidence": 0.8,
+        }
+    ]
+    gated = _apply_barrel_decisions(rows, decisions)
+    assert gated[0]["barrel_gate_result"] == "MISSING"
+    assert gated[0]["result"] == "FILTERED_OUT"
+
+
+def test_staves_barrel_decisions_fail_on_ambiguous_duplicate_filename_chain(tmp_path: Path) -> None:
+    decisions_csv = tmp_path / "decisions.csv"
+    pd.DataFrame(
+        [
+            {
+                "filename": "same.cif",
+                "source_path": str(tmp_path / "a" / "same.cif"),
+                "chain": "A",
+                "result": "BARREL",
+            },
+            {
+                "filename": "same.cif",
+                "source_path": str(tmp_path / "b" / "same.cif"),
+                "chain": "A",
+                "result": "BARREL",
+            },
+        ]
+    ).to_csv(decisions_csv, index=False)
+
+    with pytest.raises(ValueError, match="ambiguous barrel decisions"):
+        _load_barrel_decisions(str(decisions_csv))
+
+
+def test_staves_gated_filtered_rows_clear_candidate_counts(tmp_path: Path) -> None:
+    source = tmp_path / "nonbarrel.cif"
+    decisions = {
+        (str(source), "A"): {
+            "source_path": str(source),
+            "chain": "A",
+            "result": "NON_BARREL",
+            "decision_score": "0",
+            "reason": "Too few scored slices",
+        }
+    }
+    rows = [
+        {
+            "filename": source.name,
+            "source_path": str(source),
+            "chain": "A",
+            "result": "COUNTED",
+            "result_stage": "count",
+            "strand_count": 16,
+            "confidence": 0.92,
+            "candidate_strands": 16,
+            "persistent_strands": 16,
+            "support_consensus_strands": 16,
+            "count_decision_score": 1.12,
+            "barrel_wall_graph_count": 16,
+            "barrel_wall_graph_selected_ids": "1;2;3",
+            "run_window_core_base_strand_count": 18,
+            "axis_hypothesis_name": "strand_axis",
+        }
+    ]
+
+    gated = _apply_barrel_decisions(rows, decisions)
+
+    assert gated[0]["result"] == "FILTERED_OUT"
+    assert gated[0]["strand_count"] == 0
+    assert gated[0]["candidate_strands"] == 0
+    assert gated[0]["persistent_strands"] == 0
+    assert gated[0]["support_consensus_strands"] == 0
+    assert gated[0]["count_decision_score"] == 0
+    assert gated[0]["barrel_wall_graph_count"] == 0
+    assert gated[0]["barrel_wall_graph_selected_ids"] == ""
+    assert gated[0]["run_window_core_base_strand_count"] == 0
+    assert gated[0]["axis_hypothesis_name"] == ""
+
+
+def test_staves_gated_prepare_errors_are_not_rewritten_as_missing_gate(tmp_path: Path) -> None:
+    source = tmp_path / "broken.cif"
+    rows = [
+        {
+            "filename": source.name,
+            "source_path": str(source),
+            "chain": "",
+            "result": "ERROR",
+            "result_stage": "prepare",
+            "reason": "malformed structure",
+        }
+    ]
+
+    gated = _apply_barrel_decisions(rows, decisions={})
+
+    assert gated[0]["result"] == "ERROR"
+    assert gated[0]["result_stage"] == "prepare"
+    assert gated[0]["barrel_gate_result"] == "NOT_EVALUATED"
+    assert gated[0]["reason"] == "malformed structure"
+
+
+def test_staves_explicit_bad_dssp_path_does_not_fallback_to_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    mkdssp = bin_dir / "mkdssp"
+    mkdssp.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    mkdssp.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    assert find_dssp_binary("mkdssp") == str(mkdssp)
+    assert find_dssp_binary(str(tmp_path / "missing" / "mkdssp")) is None
+    with pytest.raises(DsspNotFoundError, match="Configured DSSP executable"):
+        require_dssp_binary(str(tmp_path / "missing" / "mkdssp"))
+
+
+def test_staves_gated_all_prepare_failures_still_write_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_csv = tmp_path / "staves.csv"
+    decisions_csv = tmp_path / "decisions.csv"
+    pd.DataFrame(
+        [
+            {
+                "filename": "broken.cif",
+                "source_path": str(tmp_path / "broken.cif"),
+                "chain": "A",
+                "result": "BARREL",
+                "decision_score": 0.9,
+            }
+        ]
+    ).to_csv(decisions_csv, index=False)
+
+    class FakeResult:
+        input_files = [str(tmp_path / "broken.cif")]
+
+        @staticmethod
+        def raw_rows() -> list[dict[str, object]]:
+            return [
+                {
+                    "filename": "broken.cif",
+                    "source_path": str(tmp_path / "broken.cif"),
+                    "chain": "",
+                    "result": "ERROR",
+                    "result_stage": "prepare",
+                    "reason": "malformed structure",
+                }
+            ]
+
+    monkeypatch.setattr(staves_cli, "run_pipeline_result", lambda *args, **kwargs: FakeResult())
+
+    with pytest.raises(SystemExit) as exc:
+        staves_cli.main(
+            [
+                str(tmp_path / "broken.cif"),
+                "--barrel-decisions",
+                str(decisions_csv),
+                "--out",
+                str(out_csv),
+            ]
+        )
+
+    assert exc.value.code == 2
+    assert out_csv.exists()
+    assert out_csv.with_suffix(".csv.metadata.json").exists()
+    row = pd.read_csv(out_csv).iloc[0]
+    assert row["result"] == "ERROR"
+    assert row["result_stage"] == "prepare"
+    assert row["barrel_gate_result"] == "NOT_EVALUATED"
+
+
+def test_detection_cli_disables_progress_when_stderr_is_not_tty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_kwargs: dict[str, object] = {}
+
+    def fake_run_pipeline_result(*args: object, **kwargs: object) -> object:
+        seen_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(detection_pipeline, "run_pipeline_result", fake_run_pipeline_result)
+    monkeypatch.setattr(detection_cli.sys.stderr, "isatty", lambda: False)
+
+    detection_cli.main([str(tmp_path / "input.cif"), "--out", str(tmp_path / "detection.csv")])
+
+    assert seen_kwargs["show_progress"] is False
+
+
+def test_staves_cli_disables_progress_when_stderr_is_not_tty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_csv = tmp_path / "staves.csv"
+    decisions_csv = tmp_path / "decisions.csv"
+    source = tmp_path / "input.cif"
+    pd.DataFrame(
+        [
+            {
+                "filename": source.name,
+                "source_path": str(source),
+                "chain": "A",
+                "result": "BARREL",
+                "decision_score": 0.9,
+            }
+        ]
+    ).to_csv(decisions_csv, index=False)
+    seen_kwargs: dict[str, object] = {}
+
+    class FakeResult:
+        input_files = [str(source)]
+
+        @staticmethod
+        def raw_rows() -> list[dict[str, object]]:
+            return [
+                {
+                    "filename": source.name,
+                    "source_path": str(source),
+                    "chain": "A",
+                    "result": "OK",
+                    "result_stage": "analysis",
+                    "strand_count": 8,
+                    "confidence": 0.8,
+                }
+            ]
+
+    def fake_run_pipeline_result(*args: object, **kwargs: object) -> FakeResult:
+        seen_kwargs.update(kwargs)
+        return FakeResult()
+
+    monkeypatch.setattr(staves_cli, "run_pipeline_result", fake_run_pipeline_result)
+    monkeypatch.setattr(staves_cli.sys.stderr, "isatty", lambda: False)
+
+    staves_cli.main(
+        [
+            str(source),
+            "--barrel-decisions",
+            str(decisions_csv),
+            "--out",
+            str(out_csv),
+        ]
+    )
+
+    assert seen_kwargs["show_progress"] is False
+
+
+def test_detection_failure_only_csv_uses_stable_schema(tmp_path: Path) -> None:
+    out_csv = tmp_path / "detection.csv"
+
+    write_detection_results_csv(
+        [
+            {
+                "filename": "broken.cif",
+                "source_path": str(tmp_path / "broken.cif"),
+                "chain": "A",
+                "result": "ERROR",
+                "result_stage": "prepare",
+                "reason": "malformed structure",
+            }
+        ],
+        str(out_csv),
+    )
+
+    columns = pd.read_csv(out_csv, nrows=0).columns
+    assert "decision_score" in columns
+    assert "score_type" in columns
+    assert "calibration_status" in columns
+
+
+def test_readout_score_metadata_columns_are_documented() -> None:
+    detection = {spec.name for spec in list_readout_column_specs("beta-barrel-detection")}
+    staves = {spec.name for spec in list_readout_column_specs("beta-barrel-staves")}
+
+    assert {"score_type", "calibration_status", "config_profile"} <= detection
+    assert {"score_type", "calibration_status", "config_profile"} <= staves
+
+
 def _topology_row(record_id: str, label: str, **updates: float | str) -> dict[str, float | str]:
     row: dict[str, float | str] = {
         "record_id": record_id,
         "pdb_id": record_id[:4],
         "domain_id": record_id,
         "fold_label_final": label,
-        "cz_parse_ok": 1,
-        "cz_top_fold": label,
-        "cz_sheet_count": 2.0,
-        "cz_sheet_face_count": 2.0,
-        "cz_sheet_pair_top2_fraction": 0.9,
-        "cz_sheet_pair_size_balance": 0.9,
-        "cz_sheet_pair_bilayer_score": 0.15,
-        "cz_sandwich_lobe_guard_score": 0.16,
-        "cz_sheet_pair_face_alignment": 0.8,
-        "cz_sheet_pair_normal_abs_dot": 0.8,
-        "cz_sheet_pair_cross_contact_density8": 0.25,
-        "cz_axis_best_slice_coverage_median": 0.72,
-        "cz_axis_best_angular_coverage": 0.76,
-        "cz_axis_best_largest_gap_fraction": 0.24,
-        "cz_axis_best_slice_largest_gap_fraction_mean": 0.32,
-        "cz_barrel_wall_continuity_score": 0.12,
-        "cz_angular_sector_occupancy12": 0.65,
-        "cz_axis_best_slice_high_coverage_fraction": 0.4,
-        "cz_sheet_seq_top2_interleave_score": 0.1,
-        "cz_sheet_seq_top2_order_displacement": 0.2,
-        "cz_top2_sheet_order_nonlocal_fraction": 0.2,
-        "cz_top2_sheet_order_inversion_fraction_mean": 0.1,
-        "cz_sheet_seq_greek_key_proxy": 0.05,
-        "cz_jelly_roll_order_nonlocal_score": 0.03,
-        "cz_beta_run_eight_score": 0.4,
-        "cz_angular_fft_k3_8_max": 0.1,
-        "cz_angular_fft_k3_8_best_k": 6.0,
-        "cz_axis_periodicity_score": 0.0,
-        "cz_pca_elongation": 1.2,
-        "cz_beta_alpha_alternation_fraction": 0.1,
-        "cz_alpha_shell_radial_delta": 0.0,
+        "betlas_parse_ok": 1,
+        "betlas_top_fold": label,
+        "betlas_sheet_count": 2.0,
+        "betlas_sheet_face_count": 2.0,
+        "betlas_sheet_pair_top2_fraction": 0.9,
+        "betlas_sheet_pair_size_balance": 0.9,
+        "betlas_sheet_pair_bilayer_score": 0.15,
+        "betlas_sandwich_lobe_guard_score": 0.16,
+        "betlas_sheet_pair_face_alignment": 0.8,
+        "betlas_sheet_pair_normal_abs_dot": 0.8,
+        "betlas_sheet_pair_cross_contact_density8": 0.25,
+        "betlas_axis_best_slice_coverage_median": 0.72,
+        "betlas_axis_best_angular_coverage": 0.76,
+        "betlas_axis_best_largest_gap_fraction": 0.24,
+        "betlas_axis_best_slice_largest_gap_fraction_mean": 0.32,
+        "betlas_barrel_wall_continuity_score": 0.12,
+        "betlas_angular_sector_occupancy12": 0.65,
+        "betlas_axis_best_slice_high_coverage_fraction": 0.4,
+        "betlas_sheet_seq_top2_interleave_score": 0.1,
+        "betlas_sheet_seq_top2_order_displacement": 0.2,
+        "betlas_top2_sheet_order_nonlocal_fraction": 0.2,
+        "betlas_top2_sheet_order_inversion_fraction_mean": 0.1,
+        "betlas_sheet_seq_greek_key_proxy": 0.05,
+        "betlas_jelly_roll_order_nonlocal_score": 0.03,
+        "betlas_beta_run_eight_score": 0.4,
+        "betlas_angular_fft_k3_8_max": 0.1,
+        "betlas_angular_fft_k3_8_best_k": 6.0,
+        "betlas_axis_periodicity_score": 0.0,
+        "betlas_pca_elongation": 1.2,
+        "betlas_beta_alpha_alternation_fraction": 0.1,
+        "betlas_alpha_shell_radial_delta": 0.0,
     }
     for fold_label in (
         "beta_barrel",
@@ -156,8 +569,8 @@ def _topology_row(record_id: str, label: str, **updates: float | str) -> dict[st
         "beta_sandwich",
         "tim_like_beta_alpha_barrel",
     ):
-        row[f"cz_rule_score_{fold_label}"] = 0.0
-    row[f"cz_rule_score_{label}"] = 2.0
+        row[f"betlas_rule_score_{fold_label}"] = 0.0
+    row[f"betlas_rule_score_{label}"] = 2.0
     row.update(updates)
     return row
 
@@ -167,43 +580,43 @@ def test_topology_diagnostics_scores_continuous_and_mixed_signals():
         _topology_row(
             "ambiguousA",
             "beta_sandwich",
-            cz_top_fold="jelly_roll",
-            cz_rule_score_jelly_roll=3.4,
-            cz_rule_score_beta_sandwich=3.2,
-            cz_sheet_seq_top2_interleave_score=0.8,
-            cz_sheet_seq_top2_order_displacement=0.7,
-            cz_top2_sheet_order_nonlocal_fraction=0.9,
-            cz_top2_sheet_order_inversion_fraction_mean=0.6,
-            cz_sheet_seq_greek_key_proxy=0.6,
-            cz_jelly_roll_order_nonlocal_score=0.5,
-            cz_beta_run_eight_score=1.0,
+            betlas_top_fold="jelly_roll",
+            betlas_rule_score_jelly_roll=3.4,
+            betlas_rule_score_beta_sandwich=3.2,
+            betlas_sheet_seq_top2_interleave_score=0.8,
+            betlas_sheet_seq_top2_order_displacement=0.7,
+            betlas_top2_sheet_order_nonlocal_fraction=0.9,
+            betlas_top2_sheet_order_inversion_fraction_mean=0.6,
+            betlas_sheet_seq_greek_key_proxy=0.6,
+            betlas_jelly_roll_order_nonlocal_score=0.5,
+            betlas_beta_run_eight_score=1.0,
         ),
         _topology_row(
             "barrelB",
             "beta_barrel",
-            cz_rule_score_beta_barrel=3.0,
-            cz_axis_best_slice_coverage_median=0.9,
-            cz_axis_best_angular_coverage=0.9,
-            cz_axis_best_largest_gap_fraction=0.1,
-            cz_axis_best_slice_largest_gap_fraction_mean=0.18,
-            cz_barrel_wall_continuity_score=0.55,
-            cz_angular_sector_occupancy12=1.0,
-            cz_axis_best_slice_high_coverage_fraction=0.9,
-            cz_sandwich_lobe_guard_score=0.04,
+            betlas_rule_score_beta_barrel=3.0,
+            betlas_axis_best_slice_coverage_median=0.9,
+            betlas_axis_best_angular_coverage=0.9,
+            betlas_axis_best_largest_gap_fraction=0.1,
+            betlas_axis_best_slice_largest_gap_fraction_mean=0.18,
+            betlas_barrel_wall_continuity_score=0.55,
+            betlas_angular_sector_occupancy12=1.0,
+            betlas_axis_best_slice_high_coverage_fraction=0.9,
+            betlas_sandwich_lobe_guard_score=0.04,
         ),
-        _topology_row("sandC", "beta_sandwich", cz_rule_score_beta_sandwich=3.0),
+        _topology_row("sandC", "beta_sandwich", betlas_rule_score_beta_sandwich=3.0),
     ]
 
     diagnostics = compute_topology_diagnostics(pd.DataFrame(rows), k_neighbors=2)
     ambiguous = diagnostics[diagnostics["record_id"] == "ambiguousA"].iloc[0]
     barrel = diagnostics[diagnostics["record_id"] == "barrelB"].iloc[0]
 
-    assert ambiguous["cz_jelly_rollness"] > 0.55
-    assert ambiguous["cz_sandwichness"] > 0.45
-    assert ambiguous["cz_topology_ambiguity_score"] > 0.4
-    assert ambiguous["cz_mixed_topology_flag"] == 1
-    assert "jelly_roll_like_sandwich_subtopology" in ambiguous["cz_mixed_topology_types"]
-    assert barrel["cz_barrel_likeness"] > 0.7
+    assert ambiguous["betlas_jelly_rollness"] > 0.55
+    assert ambiguous["betlas_sandwichness"] > 0.45
+    assert ambiguous["betlas_topology_ambiguity_score"] > 0.4
+    assert ambiguous["betlas_mixed_topology_flag"] == 1
+    assert "jelly_roll_like_sandwich_subtopology" in ambiguous["betlas_mixed_topology_types"]
+    assert barrel["betlas_barrel_likeness"] > 0.7
 
 
 def test_topology_diagnostics_columns_are_excluded_from_ml_features():
@@ -212,22 +625,158 @@ def test_topology_diagnostics_columns_are_excluded_from_ml_features():
             {
                 "record_id": "x",
                 "fold_label_final": "beta_barrel",
-                "cz_parse_ok": 1,
-                "cz_axis_best_angular_coverage": 0.8,
-                "cz_topology_ambiguity_score": 0.9,
-                "cz_boundary_region_flag": 1,
-                "cz_jelly_rollness": 0.7,
-                "cz_mixed_topology_score": 0.6,
-                "cz_neighbor_label_entropy": 0.5,
+                "betlas_parse_ok": 1,
+                "betlas_axis_best_angular_coverage": 0.8,
+                "betlas_topology_ambiguity_score": 0.9,
+                "betlas_boundary_region_flag": 1,
+                "betlas_jelly_rollness": 0.7,
+                "betlas_mixed_topology_score": 0.6,
+                "betlas_neighbor_label_entropy": 0.5,
             }
         ]
     )
 
     columns = numeric_feature_columns(df)
 
-    assert "cz_axis_best_angular_coverage" in columns
-    assert "cz_topology_ambiguity_score" not in columns
-    assert "cz_boundary_region_flag" not in columns
-    assert "cz_jelly_rollness" not in columns
-    assert "cz_mixed_topology_score" not in columns
-    assert "cz_neighbor_label_entropy" not in columns
+    assert "betlas_axis_best_angular_coverage" in columns
+    assert "betlas_topology_ambiguity_score" not in columns
+    assert "betlas_boundary_region_flag" not in columns
+    assert "betlas_jelly_rollness" not in columns
+    assert "betlas_mixed_topology_score" not in columns
+    assert "betlas_neighbor_label_entropy" not in columns
+
+
+def test_topology_diagnostics_errors_on_missing_explicit_predictions(tmp_path: Path) -> None:
+    features = tmp_path / "features.csv"
+    pd.DataFrame([_topology_row("sandC", "beta_sandwich")]).to_csv(features, index=False)
+
+    with pytest.raises(FileNotFoundError, match="prediction CSV does not exist"):
+        run_topology_diagnostics(
+            features_csv=features,
+            predictions_csv=tmp_path / "missing_predictions.csv",
+            out_csv=tmp_path / "topology.csv",
+            write_manifest=False,
+            predictions_required=True,
+        )
+
+
+def test_topology_diagnostics_errors_when_explicit_predictions_do_not_match(tmp_path: Path) -> None:
+    features = tmp_path / "features.csv"
+    predictions = tmp_path / "predictions.csv"
+    pd.DataFrame([_topology_row("sandC", "beta_sandwich")]).to_csv(features, index=False)
+    pd.DataFrame(
+        [
+            {
+                "record_id": "other",
+                "prob_beta_sandwich": 1.0,
+                "prob_beta_barrel": 0.0,
+            }
+        ]
+    ).to_csv(predictions, index=False)
+
+    with pytest.raises(ValueError, match="did not match every parse-ok feature row"):
+        run_topology_diagnostics(
+            features_csv=features,
+            predictions_csv=predictions,
+            out_csv=tmp_path / "topology.csv",
+            write_manifest=False,
+            predictions_required=True,
+        )
+
+
+def test_topology_diagnostics_parse_failed_rows_are_status_only() -> None:
+    diagnostics = compute_topology_diagnostics(
+        pd.DataFrame(
+            [
+                {
+                    "record_id": "bad",
+                    "pdb_id": "bad1",
+                    "domain_id": "bad",
+                    "betlas_parse_ok": 0,
+                    "betlas_error": "no beta-sheet segments",
+                    "betlas_top_fold": "beta_sandwich",
+                    "betlas_rule_score_beta_sandwich": 10.0,
+                }
+            ]
+        )
+    )
+
+    assert diagnostics.loc[0, "betlas_topology_status"] == "parse_failed"
+    assert "no beta-sheet" in diagnostics.loc[0, "betlas_topology_error"]
+    assert "betlas_topology_ambiguity_score" in diagnostics.columns
+    assert "betlas_jelly_rollness" in diagnostics.columns
+    assert diagnostics.loc[0, "betlas_topology_ambiguity_score"] == ""
+    assert diagnostics.loc[0, "betlas_jelly_rollness"] == ""
+
+
+def test_topology_diagnostics_explicit_out_controls_default_manifest_path(tmp_path: Path) -> None:
+    features = tmp_path / "features.csv"
+    out_csv = tmp_path / "requested" / "topology.csv"
+    stale_manifest = tmp_path / "stale" / "topology.manifest.json"
+    config = tmp_path / "topology.yaml"
+    pd.DataFrame([_topology_row("sandC", "beta_sandwich")]).to_csv(features, index=False)
+    config.write_text(
+        "\n".join(
+            [
+                "io:",
+                f"  manifest_path: {stale_manifest}",
+                "  output_csv: should_not_be_used.csv",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_topology_diagnostics(
+        features_csv=features,
+        out_csv=out_csv,
+        config_path=config,
+    )
+
+    assert result.manifest_path == out_csv.with_suffix(".csv.manifest.json")
+    assert result.manifest_path.exists()
+    assert not stale_manifest.exists()
+
+
+def test_topology_cli_does_not_load_config_predictions_by_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    features = tmp_path / "features.csv"
+    predictions = tmp_path / "predictions.csv"
+    out_csv = tmp_path / "topology.csv"
+    config = tmp_path / "topology.yaml"
+    pd.DataFrame([_topology_row("sandC", "beta_sandwich")]).to_csv(features, index=False)
+    pd.DataFrame(
+        [
+            {
+                "record_id": "sandC",
+                "model": "hist_gradient_boosting",
+                "prob_beta_barrel": 1.0,
+                "prob_beta_sandwich": 0.0,
+            }
+        ]
+    ).to_csv(predictions, index=False)
+    config.write_text(
+        "\n".join(
+            [
+                "io:",
+                f"  predictions_csv: {predictions}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    topology_diagnostics_cli(
+        [
+            "--config",
+            str(config),
+            "--features",
+            str(features),
+            "--out",
+            str(out_csv),
+        ]
+    )
+
+    capsys.readouterr()
+    manifest = json.loads(out_csv.with_suffix(".csv.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["parameters"]["predictions_loaded"] is False

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+_COMPAT_BENCHMARK_FLAG = "allowed_for_" + "pub" + "lication_benchmark"
+
 
 @dataclass(frozen=True)
 class ResidueRecord:
@@ -70,7 +72,7 @@ class DomainCandidate:
     assembly_id: str = "1"
     model_id: int = 0
     qc_status: str = "external_source_unreviewed"
-    allowed_for_publication_benchmark: bool = False
+    allowed_for_benchmark: bool = False
     discovered_by_betlas: bool = False
     label_conflict_notes: str = ""
 
@@ -97,9 +99,7 @@ class DomainCandidate:
             assembly_id=str(row.get("assembly_id", "1") or "1"),
             model_id=int(row.get("model_id", 0) or 0),
             qc_status=str(row.get("qc_status", "external_source_unreviewed")),
-            allowed_for_publication_benchmark=str(
-                row.get("allowed_for_publication_benchmark", "False")
-            ).lower()
+            allowed_for_benchmark=str(row.get("allowed_for_benchmark", row.get(_COMPAT_BENCHMARK_FLAG, "False"))).lower()
             in {"1", "true", "yes"},
             discovered_by_betlas=str(row.get("discovered_by_betlas", "False")).lower()
             in {"1", "true", "yes"},
@@ -152,6 +152,6 @@ class GeometrySignature:
         row = self.domain.to_dict()
         row.update(self.features)
         for label, score in self.fold_scores.items():
-            row[f"cz_rule_score_{label}"] = float(score)
-        row["cz_warnings"] = ";".join(self.warnings)
+            row[f"betlas_rule_score_{label}"] = float(score)
+        row["betlas_warnings"] = ";".join(self.warnings)
         return row

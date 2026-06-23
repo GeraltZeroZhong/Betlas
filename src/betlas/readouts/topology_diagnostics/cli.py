@@ -2,16 +2,25 @@ from __future__ import annotations
 
 import argparse
 
-from .config import cfg_get, load_config
 from .core import MODE_COLUMNS, run_topology_diagnostics
 
 
-def main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None, *, prog: str = "betlas readout topology-diagnostics") -> None:
     parser = argparse.ArgumentParser(
-        prog="betlas readout topology-diagnostics",
+        prog=prog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Compute topology ambiguity, continuous fold-organization scores, "
             "and mixed-topology flags from a Betlas feature table."
+        ),
+        epilog=(
+            "Examples:\n"
+            f"  {prog} --features runs/betlas_features.csv --out runs/topology.csv\n"
+            f"  {prog} --mode ambiguity --features runs/betlas_features.csv\n"
+            f"  {prog} --features runs/betlas_features.csv --predictions runs/oof_predictions.csv --neighbors 15\n\n"
+            "Input feature CSV: canonical Betlas feature columns plus record identifiers.\n"
+            "Output CSV: ambiguity, continuous topology, and mixed-topology readout columns selected by --mode.\n"
+            "Predictions: optional OOF prediction CSV; when absent, grammar-rule probabilities are used."
         ),
     )
     parser.add_argument("--config", default=None, help="Topology diagnostics YAML config.")
@@ -43,9 +52,8 @@ def main(argv: list[str] | None = None) -> None:
         help="Append readout columns to the original feature table instead of writing a compact readout table.",
     )
     args = parser.parse_args(argv)
-    config = load_config(args.config)
     model = args.model if args.model is not None and str(args.model).strip() else None
-    predictions = None if args.no_predictions else (args.predictions or cfg_get(config, "io.predictions_csv", None))
+    predictions = None if args.no_predictions else args.predictions
     result = run_topology_diagnostics(
         features_csv=args.features,
         predictions_csv=predictions,
@@ -57,6 +65,7 @@ def main(argv: list[str] | None = None) -> None:
         config_path=args.config,
         manifest_path=args.manifest,
         write_manifest=not args.no_manifest,
+        predictions_required=args.predictions is not None and not args.no_predictions,
     )
     print(f"Wrote {len(result.diagnostics)} {args.mode} topology diagnostic rows to {result.output_csv}")
     if result.manifest_path is not None:

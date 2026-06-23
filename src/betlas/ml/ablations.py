@@ -20,17 +20,26 @@ from tqdm import tqdm
 
 from ..constants import FOLD_LABELS
 from ..provenance import build_run_manifest, write_json
-from .benchmark import numeric_feature_columns
+from ..schema import normalize_feature_columns
+from .benchmark import (
+    BENCHMARK_GROUP_COLUMNS,
+    BENCHMARK_REQUIRED_COLUMNS,
+    _group_source_counts,
+    _require_columns,
+    _split_summary,
+    _xgboost_available,
+    numeric_feature_columns,
+)
 from .splits import fold_label_counts, make_grouped_splits
 
 CONFIG_RESOURCE = "conf/ablation_default.yaml"
 
 AGGREGATE_FEATURE_PREFIXES = (
-    "cz_rule_score_",
+    "betlas_rule_score_",
 )
 AGGREGATE_FEATURES = {
-    "cz_rule_margin",
-    "cz_parse_ok",
+    "betlas_rule_margin",
+    "betlas_parse_ok",
 }
 
 
@@ -85,36 +94,36 @@ def raw_geometry_feature_columns(df: pd.DataFrame) -> list[str]:
 
 
 def feature_group_for(column: str) -> str:
-    if column.startswith(("cz_beta_run_", "cz_beta_segment_to_run_")):
+    if column.startswith(("betlas_beta_run_", "betlas_beta_segment_to_run_")):
         return "beta_run_topology"
-    if column.startswith("cz_sheet_pair_"):
+    if column.startswith("betlas_sheet_pair_"):
         return "sheet_pair_packing"
-    if column.startswith(("cz_sheet_seq_", "cz_sheet_order_", "cz_top2_sheet_order_", "cz_jelly_roll_order_")):
+    if column.startswith(("betlas_sheet_seq_", "betlas_sheet_order_", "betlas_top2_sheet_order_", "betlas_jelly_roll_order_")):
         return "sheet_sequence_topology"
-    if column.startswith("cz_contact"):
+    if column.startswith("betlas_contact"):
         return "contact_graph"
     if column.startswith(
         (
-            "cz_angular_fft_k1",
-            "cz_angular_fft_k2",
-            "cz_angular_sector_",
-            "cz_sandwich_lobe_guard",
+            "betlas_angular_fft_k1",
+            "betlas_angular_fft_k2",
+            "betlas_angular_sector_",
+            "betlas_sandwich_lobe_guard",
         )
     ):
         return "angular_lobes"
-    if column.startswith(("cz_axis_periodicity", "cz_angular_fft_k3_8", "cz_angular_fft_k")):
+    if column.startswith(("betlas_axis_periodicity", "betlas_angular_fft_k3_8", "betlas_angular_fft_k")):
         return "axis_periodicity"
-    if column.startswith(("cz_axis_best_", "cz_z_continuity", "cz_angular_gap", "cz_barrel_wall_")):
+    if column.startswith(("betlas_axis_best_", "betlas_z_continuity", "betlas_angular_gap", "betlas_barrel_wall_")):
         return "axis_closure"
-    if column.startswith(("cz_sheet_", "cz_largest_sheet", "cz_parallel_sheet", "cz_antiparallel_sheet")):
+    if column.startswith(("betlas_sheet_", "betlas_largest_sheet", "betlas_parallel_sheet", "betlas_antiparallel_sheet")):
         return "sheet_global"
-    if column.startswith(("cz_strand_order_", "cz_strand_direction_", "cz_strand_ntc_", "cz_strand_axis_")):
+    if column.startswith(("betlas_strand_order_", "betlas_strand_direction_", "betlas_strand_ntc_", "betlas_strand_axis_")):
         return "strand_order"
-    if column.startswith(("cz_alpha_shell_", "cz_helix_beta_", "cz_beta_alpha_")):
+    if column.startswith(("betlas_alpha_shell_", "betlas_helix_beta_", "betlas_beta_alpha_")):
         return "alpha_shell"
-    if column.startswith(("cz_helix_", "cz_residue_", "cz_beta_residue", "cz_beta_strand", "cz_strand_length", "cz_sse_count")):
+    if column.startswith(("betlas_helix_", "betlas_residue_", "betlas_beta_residue", "betlas_beta_strand", "betlas_strand_length", "betlas_sse_count")):
         return "composition"
-    if column.startswith(("cz_pca_",)):
+    if column.startswith(("betlas_pca_",)):
         return "global_shape"
     return "misc"
 
@@ -170,7 +179,7 @@ def _make_model(random_state: int, config: Mapping[str, Any]) -> Any:
 
 def _groups(df: pd.DataFrame) -> np.ndarray:
     groups = pd.Series("", index=df.index, dtype=object)
-    for column in ("cath_s35_cluster_id", "cath_homology_code", "pdb_id"):
+    for column in BENCHMARK_GROUP_COLUMNS:
         if column not in df:
             continue
         values = df[column].astype(str).str.strip()
@@ -318,24 +327,94 @@ def run_ablation_suite(
         config=OmegaConf.create(ablation_config),
         f=out_dir / "ablation_config_resolved.yaml",
     )
-    df = pd.read_csv(features_csv, dtype=str, keep_default_na=False)
-    df = df[df["fold_label_final"].isin(FOLD_LABELS)].copy()
-    df = df[pd.to_numeric(df.get("cz_parse_ok", 0), errors="coerce").fillna(0).astype(int) == 1]
+    df_all = normalize_feature_columns(pd.read_csv(features_csv, dtype=str, keep_default_na=False))
+    _require_columns(df_all, BENCHMARK_REQUIRED_COLUMNS, context="ablation")
+    label_mask = df_all["fold_label_final"].isin(FOLD_LABELS)
+    df = df_all[label_mask].copy()
+    parse_mask = pd.to_numeric(df.get("betlas_parse_ok", 0), errors="coerce").fillna(0).astype(int) == 1
+    df = df[parse_mask].copy()
     feature_cols = raw_geometry_feature_columns(df)
     if not feature_cols:
+        write_json(
+            out_dir / "ablation_preflight.json",
+            {
+                "status": "failed",
+                "failure_stage": "feature_schema",
+                "error": "no raw geometry feature columns found",
+                "input_rows": int(len(df_all)),
+                "label_filtered_rows": int(label_mask.sum()),
+                "parse_ok_rows": int(len(df)),
+                "feature_set": "raw_geometry",
+                "feature_count": 0,
+                "features_csv": str(features_csv),
+            },
+        )
         raise ValueError("no raw geometry feature columns found")
     x_all = df[feature_cols].apply(pd.to_numeric, errors="coerce").astype(np.float32)
 
     encoder = LabelEncoder()
     encoder.fit(sorted(FOLD_LABELS))
     groups = _groups(df)
+    if not any(str(group).strip() for group in groups):
+        raise ValueError(
+            "ablation could not derive grouped cross-validation groups; provide at least one "
+            f"non-empty column from {', '.join(BENCHMARK_GROUP_COLUMNS)}"
+        )
     y = encoder.transform(df["fold_label_final"])
-    splits, split_strategy, n_splits = make_grouped_splits(
-        df[feature_cols],
-        y,
-        groups,
-        n_splits=n_splits,
-        random_state=random_state,
+    model_name = _cfg_str(ablation_config, "model.name", "hist_gradient_boosting")
+    dependency_status = {model_name: "requested"}
+    dependency_error = ""
+    if model_name == "xgboost" and not _xgboost_available():
+        dependency_status[model_name] = "unavailable: xgboost is not installed"
+        dependency_error = "ablation model.name=xgboost requires the optional xgboost package"
+    preflight = {
+        "input_rows": int(len(df_all)),
+        "label_filtered_rows": int(label_mask.sum()),
+        "parse_ok_rows": int(len(df)),
+        "dropped_rows": int(len(df_all) - len(df)),
+        "label_filter": f"fold_label_final in {list(FOLD_LABELS)}",
+        "parse_filter": "betlas_parse_ok == 1",
+        "class_counts": {str(k): int(v) for k, v in df["fold_label_final"].value_counts().sort_index().items()},
+        "group_columns_priority": list(BENCHMARK_GROUP_COLUMNS),
+        "group_source_counts": _group_source_counts(df),
+        "group_count": int(pd.Series(groups).astype(str).nunique()),
+        "feature_set": "raw_geometry",
+        "feature_count": int(len(feature_cols)),
+        "features_csv": str(features_csv),
+        "model_dependency_status": dependency_status,
+        "effective_split_strategy": "not_run",
+        "effective_n_splits": 0,
+        "folds": [],
+    }
+    write_json(out_dir / "ablation_preflight.json", preflight)
+    if dependency_error:
+        raise RuntimeError(dependency_error)
+    try:
+        splits, split_strategy, n_splits = make_grouped_splits(
+            df[feature_cols],
+            y,
+            groups,
+            n_splits=n_splits,
+            random_state=random_state,
+        )
+    except ValueError as exc:
+        write_json(
+            out_dir / "ablation_preflight.json",
+            {
+                **preflight,
+                "effective_split_strategy": "split_failed",
+                "split_error": str(exc),
+            },
+        )
+        raise
+    write_json(
+        out_dir / "ablation_preflight.json",
+        {
+            **preflight,
+            "effective_split_strategy": split_strategy,
+            "effective_n_splits": int(n_splits),
+            "folds": _split_summary(splits, df["fold_label_final"], groups),
+        },
     )
     feature_groups = build_feature_groups(feature_cols)
     group_catalog = pd.DataFrame(
@@ -485,8 +564,11 @@ def run_ablation_suite(
         splits=splits,
     )
     fold_counts.to_csv(out_dir / "fold_label_counts.csv", index=False)
+    per_ablation_outputs: dict[str, Path] = {}
     for ablation_type, part in results.groupby("ablation_type"):
-        part.to_csv(out_dir / f"{ablation_type}.csv", index=False)
+        path = out_dir / f"{ablation_type}.csv"
+        part.to_csv(path, index=False)
+        per_ablation_outputs[f"{ablation_type}_csv"] = path
 
     aggregate_features_excluded = sorted(
         [
@@ -511,10 +593,13 @@ def run_ablation_suite(
         },
         inputs={"features_csv": features_csv},
         outputs={
+            "ablation_preflight": out_dir / "ablation_preflight.json",
             "ablation_summary": out_dir / "ablation_summary.csv",
+            "ablation_summary_partial": out_dir / "ablation_summary.partial.csv",
             "feature_group_catalog": out_dir / "feature_group_catalog.csv",
             "fold_label_counts": out_dir / "fold_label_counts.csv",
             "ablation_config": out_dir / "ablation_config_resolved.yaml",
+            **per_ablation_outputs,
         },
         metrics={
             "n_rows": int(len(df)),
@@ -527,6 +612,7 @@ def run_ablation_suite(
             "feature_groups": {group: len(columns) for group, columns in feature_groups.items()},
             "fold_label_counts": fold_counts.to_dict(orient="records"),
             "ablation_config": ablation_config,
+            "model_dependency_status": dependency_status,
         },
     )
     write_json(out_dir / "ablation_manifest.json", manifest)

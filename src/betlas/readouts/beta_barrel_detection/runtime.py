@@ -42,7 +42,7 @@ def dssp_requirement_message() -> str:
         "PATH.\n"
         "If DSSP is installed in a non-standard location, set "
         "`runtime.dssp_bin_path=/absolute/path/to/mkdssp` in the Hydra config or "
-        "`betlas.readouts.beta_barrel_detection.config.Config.DSSP_BIN_PATH` for legacy code."
+        "`betlas.readouts.beta_barrel_detection.config.Config.DSSP_BIN_PATH` for the flat config shim."
     )
 
 

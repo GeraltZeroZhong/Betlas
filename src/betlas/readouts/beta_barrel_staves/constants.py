@@ -32,10 +32,14 @@ RESULT_ERROR = "ERROR"
 
 DEFAULT_RESULT_COLUMNS = (
     "filename",
+    "source_path",
     "chain",
     "result",
     "result_stage",
     "strand_count",
+    "score_type",
+    "calibration_status",
+    "config_profile",
     "confidence",
     "confidence_basis",
     "count_threshold",

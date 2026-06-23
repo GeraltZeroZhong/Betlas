@@ -9,6 +9,10 @@ class ReadoutSpec:
     name: str
     summary: str
     main: Callable[[list[str] | None], None]
+    input_protocol: str
+    output_protocol: str
+    requires: str = ""
+    surface: str = "native"
 
 
 def _beta_barrel_staves_main(argv: list[str] | None = None) -> None:
@@ -23,16 +27,10 @@ def _beta_barrel_detection_main(argv: list[str] | None = None) -> None:
     main(argv)
 
 
-def _topology_diagnostics_main(argv: list[str] | None = None) -> None:
+def _topology_diagnostics_main(argv: list[str] | None = None, *, prog: str = "betlas readout topology-diagnostics") -> None:
     from .topology_diagnostics.cli import main
 
-    main(argv)
-
-
-def _bfvd_scan_main(argv: list[str] | None = None) -> None:
-    from .bfvd_scan.cli import main
-
-    main(argv)
+    main(argv, prog=prog)
 
 
 def _mode_main(mode: str) -> Callable[[list[str] | None], None]:
@@ -40,7 +38,12 @@ def _mode_main(mode: str) -> Callable[[list[str] | None], None]:
         args = list(argv or [])
         if not any(arg == "--mode" or arg.startswith("--mode=") for arg in args):
             args = ["--mode", mode, *args]
-        _topology_diagnostics_main(args)
+        alias = {
+            "ambiguity": "topology-ambiguity",
+            "continuous": "fold-continuous-scores",
+            "mixed": "mixed-topology",
+        }.get(mode, "topology-diagnostics")
+        _topology_diagnostics_main(args, prog=f"betlas readout {alias}")
 
     return run
 
@@ -50,36 +53,45 @@ READOUTS: dict[str, ReadoutSpec] = {
         name="beta-barrel-detection",
         summary="Betlas native beta-barrel chain detection readout.",
         main=_beta_barrel_detection_main,
+        input_protocol="PDB/mmCIF structure file or directory",
+        output_protocol="CSV rows with beta-barrel-like geometry decision, heuristic score, stage, gate, and layer evidence",
+        requires="DSSP/mkdssp",
     ),
     "beta-barrel-staves": ReadoutSpec(
         name="beta-barrel-staves",
         summary="Secondary readout for beta-barrel strand/stave count.",
         main=_beta_barrel_staves_main,
-    ),
-    "bfvd-viral-beta-fold-scan": ReadoutSpec(
-        name="bfvd-viral-beta-fold-scan",
-        summary="Prospective BFVD viral beta-fold grammar scan and topology audit.",
-        main=_bfvd_scan_main,
+        input_protocol="PDB/mmCIF structure file or directory",
+        output_protocol="CSV rows with candidate stave count, heuristic confidence, gate status, and slice/layer evidence",
+        requires="DSSP/mkdssp",
     ),
     "fold-continuous-scores": ReadoutSpec(
         name="fold-continuous-scores",
         summary="Continuous jelly-rollness, sandwichness, and barrel-likeness scores.",
         main=_mode_main("continuous"),
+        input_protocol="Betlas feature CSV",
+        output_protocol="CSV columns for continuous topology scores and basis JSON",
     ),
     "mixed-topology": ReadoutSpec(
         name="mixed-topology",
         summary="Hybrid-domain and mixed-local-topology detection.",
         main=_mode_main("mixed"),
+        input_protocol="Betlas feature CSV",
+        output_protocol="CSV columns for mixed-topology score, flag, types, and audit priority",
     ),
     "topology-ambiguity": ReadoutSpec(
         name="topology-ambiguity",
         summary="Boundary-region ambiguity score from probabilities, grammar conflicts, and neighbors.",
         main=_mode_main("ambiguity"),
+        input_protocol="Betlas feature CSV with optional prediction CSV",
+        output_protocol="CSV columns for ambiguity score, probability summaries, rule conflict, and neighbor evidence",
     ),
     "topology-diagnostics": ReadoutSpec(
         name="topology-diagnostics",
         summary="All topology diagnostic secondary readouts in one table.",
         main=_topology_diagnostics_main,
+        input_protocol="Betlas feature CSV with optional prediction CSV",
+        output_protocol="CSV table combining ambiguity, continuous topology, and mixed-topology diagnostics",
     ),
 }
 

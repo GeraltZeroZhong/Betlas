@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import gzip
+import os
 import random
 import re
+import shutil
+import tempfile
 import urllib.request
 from collections import Counter, defaultdict
 from collections.abc import Iterable
@@ -17,6 +20,24 @@ _PROP_ARCHES = {"2.105", "2.110", "2.115", "2.120", "2.130", "2.140"}
 _PRISM_ARCHES = {"2.90", "2.100"}
 _SOLENOID_ARCHES = {"2.150", "2.160"}
 _TIM_TOPOLOGIES = {"3.20.20", "3.20.110"}
+_URL_TIMEOUT_SECONDS = 30
+
+
+def _download_atomic(url: str, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp") as handle:
+            tmp_path = Path(handle.name)
+        with urllib.request.urlopen(url, timeout=_URL_TIMEOUT_SECONDS) as response, tmp_path.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+        if tmp_path.stat().st_size == 0:
+            raise OSError(f"downloaded empty file from {url}")
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
 
 
 def ensure_cath_files(cath_dir: Path = DEFAULT_CATH_DIR) -> dict[str, Path]:
@@ -31,7 +52,7 @@ def ensure_cath_files(cath_dir: Path = DEFAULT_CATH_DIR) -> dict[str, Path]:
         elif key == "s35":
             path = cath_dir / "cath-b-s35-newest.gz"
         if not path.exists() or path.stat().st_size == 0:
-            urllib.request.urlretrieve(url, path)
+            _download_atomic(url, path)
         paths[key] = path
     return paths
 
@@ -157,7 +178,7 @@ def build_cath_label_rows(
                 "curation_date": "",
                 "label_conflict_notes": "",
                 "qc_status": "external_source_unreviewed",
-                "allowed_for_publication_benchmark": False,
+                "allowed_for_benchmark": False,
                 "discovered_by_betlas": False,
                 "cath_status": status,
                 "cath_code": cath_code,

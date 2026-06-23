@@ -1,0 +1,329 @@
+schema_version: 1
+policy:
+  stable_python_api: src/betlas only
+  pypi_package: false for every entry below
+  tracked_role: repository companion workflows and external-method adapters
+  execution_context: run from the repository root with PYTHONPATH=.:src for Python scripts
+  smoke_contract: each cli or module_cli entry must support --help without creating workflow outputs
+  generated_outputs: write generated tables, downloaded tools, caches, and local environments outside tracked source paths
+scripts:
+  - path: scripts/run_full_pipeline.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: CATH files, mmCIF cache, optional YAML workflow config
+    outputs: labels CSV, Betlas feature CSV, benchmark tables, run manifest
+    dependencies: betlas, pandas, omegaconf, tqdm
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/foldseek/evaluate_dataset.py
+    category: external_baseline_adapter
+    entry: cli
+    inputs: positive and negative structure directories, Foldseek executable
+    outputs: per-record predictions, metrics, run manifest
+    dependencies: foldseek, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/foldseek/runner.py
+    category: external_baseline_helper
+    entry: import_helper
+    inputs: Foldseek command parameters
+    outputs: subprocess results and parsed tabular output
+    dependencies: foldseek
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py
+    category: external_baseline_helper
+    entry: cli
+    inputs: query and target structure paths
+    outputs: Foldseek search tables
+    dependencies: foldseek, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/foldseek/structures.py
+    category: external_baseline_helper
+    entry: import_helper
+    inputs: structure directories
+    outputs: normalized structure records
+    dependencies: biopython
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/isitabarrel/evaluate_dataset.py
+    category: external_baseline_adapter
+    entry: cli
+    inputs: positive and negative structure directories, IsItABarrel script
+    outputs: per-record predictions, metrics, run manifest
+    dependencies: isitabarrel, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/isitabarrel/contact_maps.py
+    category: external_baseline_helper
+    entry: import_helper
+    inputs: protein structures
+    outputs: contact-map arrays
+    dependencies: numpy, biopython
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/isitabarrel/runner.py
+    category: external_baseline_helper
+    entry: import_helper
+    inputs: IsItABarrel command parameters
+    outputs: subprocess results and parsed predictions
+    dependencies: isitabarrel
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/isitabarrel/structure_map.py
+    category: external_baseline_helper
+    entry: cli
+    inputs: structure paths
+    outputs: structure mapping tables
+    dependencies: pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/pred_tmbb2/evaluate_dataset.py
+    category: external_baseline_adapter
+    entry: cli
+    inputs: positive and negative structure directories, JUCHMME directory
+    outputs: per-record predictions, metrics, run manifest
+    dependencies: java, juchmme, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/pred_tmbb2/runner.py
+    category: external_baseline_helper
+    entry: import_helper
+    inputs: JUCHMME command parameters
+    outputs: subprocess results and parsed predictions
+    dependencies: java, juchmme
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/pred_tmbb2/sequences.py
+    category: external_baseline_helper
+    entry: import_helper
+    inputs: structure paths
+    outputs: FASTA sequences
+    dependencies: biopython
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_detection/pred_tmbb2/structure_sequence.py
+    category: external_baseline_helper
+    entry: cli
+    inputs: structure paths
+    outputs: sequence records
+    dependencies: biopython
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/PolarBearal3Cli.cs
+    category: external_baseline_adapter
+    entry: dotnet_helper
+    inputs: PolarBearal3 checkout and structure path
+    outputs: PolarBearal3 command-line output
+    dependencies: dotnet, PolarBearal3
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/PolarBearal3Cli.csproj
+    category: external_baseline_adapter
+    entry: dotnet_project
+    inputs: PolarBearal3 command-line shim source
+    outputs: compiled helper DLL
+    dependencies: dotnet
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/fetch_external_tools.sh
+    category: external_baseline_setup
+    entry: shell_cli
+    inputs: upstream tool repositories and release archives
+    outputs: local tool checkouts and verified archives
+    dependencies: bash, git, curl, sha256sum, apt-get
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_betaware.sh
+    category: external_baseline_adapter
+    entry: shell_cli
+    inputs: FASTA, profile, threshold
+    outputs: BETAWARE prediction output
+    dependencies: bash, python, BETAWARE
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_juchmme_pred_tmbb2.sh
+    category: external_baseline_adapter
+    entry: shell_cli
+    inputs: mode, FASTA
+    outputs: JUCHMME prediction output
+    dependencies: bash, java, JUCHMME
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_polarbearal.sh
+    category: external_baseline_adapter
+    entry: shell_cli
+    inputs: structure path
+    outputs: PolarBearal3 prediction output
+    dependencies: bash, dotnet, PolarBearal3
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_proftmb.sh
+    category: external_baseline_adapter
+    entry: shell_cli
+    inputs: proftmb query file
+    outputs: PROFtmb tabular prediction output
+    dependencies: bash, PROFtmb
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_smoke_tests.sh
+    category: external_baseline_smoke_runner
+    entry: shell_cli
+    inputs: set up external-method tool directories
+    outputs: smoke status JSON files
+    dependencies: bash, python, external baseline wrappers
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/run_tmbed.sh
+    category: external_baseline_adapter
+    entry: shell_cli
+    inputs: FASTA and optional embedding cache
+    outputs: TMbed prediction output
+    dependencies: bash, python, TMbed
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/setup_envs.sh
+    category: external_baseline_setup
+    entry: shell_cli
+    inputs: conda or mamba environment manager
+    outputs: local method-specific environments
+    dependencies: bash, mamba
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/external_baselines/beta_barrel_staves/stave_count_wrappers/scripts/write_external_status.py
+    category: external_baseline_helper
+    entry: cli
+    inputs: method status fields, command JSON, input and output descriptors
+    outputs: status JSON manifest
+    dependencies: python
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/workflows.py
+    category: reproducibility_helper
+    entry: import_helper
+    inputs: full workflow configuration
+    outputs: label tables, feature tables, benchmark results
+    dependencies: betlas, pandas, omegaconf, tqdm
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readout_benchmarks/beta_barrel_detection/align_external_baselines_to_cohort.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: detection benchmark cohort and external baseline outputs
+    outputs: aligned comparison tables
+    dependencies: pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readout_benchmarks/beta_barrel_detection/build_esmc_embeddings_for_cohort.py
+    category: asset_builder
+    entry: cli
+    inputs: cohort CSV, local ESM-C weights
+    outputs: aligned ESM-C embedding cache
+    dependencies: torch, esm, numpy, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readout_benchmarks/beta_barrel_detection/build_full_mpstruc_benchmark.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: MPstruc, CATH candidates, structure download sources
+    outputs: beta-barrel detection benchmark cohort
+    dependencies: pandas, requests
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readout_benchmarks/beta_barrel_detection/run_betlas151_layer_radial16_official.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: detection benchmark cohort, Betlas features, optional ESM-C embeddings
+    outputs: official summary tables and asset-bundle inputs
+    dependencies: betlas, pandas, catboost, numpy
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readout_benchmarks/beta_barrel_detection/run_feature_block_ablation.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: detection benchmark tables and feature-block inputs
+    outputs: feature-block ablation tables
+    dependencies: pandas, catboost, numpy
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readout_benchmarks/beta_barrel_staves/run_betlas151_layer_radial16_official.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: stave-count aligned dataset and layer/radial features
+    outputs: official summary tables and asset-bundle inputs
+    dependencies: pandas, catboost, numpy
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/beta_barrel_detection/betlas_readout.py
+    category: reproducibility_helper
+    entry: import_helper
+    inputs: detection benchmark paths and readout parameters
+    outputs: official detection readout tables
+    dependencies: betlas, pandas, catboost, numpy
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/beta_barrel_detection/evaluation/__main__.py
+    category: reproducibility_runner
+    entry: module_cli
+    inputs: positive and negative structure directories
+    outputs: detection evaluation tables
+    dependencies: betlas, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/beta_barrel_detection/evaluation/app.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: positive and negative structure directories
+    outputs: detection evaluation tables and ablation summary
+    dependencies: betlas, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/beta_barrel_detection/evaluation/metrics.py
+    category: reproducibility_helper
+    entry: import_helper
+    inputs: prediction and label arrays
+    outputs: classification metrics
+    dependencies: pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/beta_barrel_detection/evaluation/runner.py
+    category: reproducibility_helper
+    entry: import_helper
+    inputs: evaluation directories and detector settings
+    outputs: evaluation result records
+    dependencies: betlas, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/beta_barrel_staves/external_baselines.py
+    category: reproducibility_helper
+    entry: import_helper
+    inputs: external stave-count method outputs
+    outputs: normalized comparison tables
+    dependencies: pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/bfvd/__main__.py
+    category: reproducibility_runner
+    entry: module_cli
+    inputs: BFVD model directory and metadata tables
+    outputs: feature rows, topology audit table, funnel table, run manifest
+    dependencies: betlas, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/bfvd/cli.py
+    category: reproducibility_runner
+    entry: cli
+    inputs: BFVD model directory and metadata tables
+    outputs: feature rows, topology audit table, funnel table, run manifest
+    dependencies: betlas, pandas
+    stable_python_api: false
+    pypi_api: false
+  - path: scripts/reproducibility/readouts/bfvd/core.py
+    category: reproducibility_helper
+    entry: import_helper
+    inputs: BFVD PDB models, metadata, taxonomy, optional Foldseek context
+    outputs: feature rows, topology audit table, funnel table
+    dependencies: betlas, pandas
+    stable_python_api: false
+    pypi_api: false

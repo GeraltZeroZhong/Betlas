@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import AppConfig
 
-PREPARE_CACHE_VERSION = 2
+PREPARE_CACHE_VERSION = 3
 PREPARE_PRODUCER_SCHEMA_VERSION = 1
 _RESIDUE_CACHE_KEYS = (
     "res_id",
@@ -86,6 +86,7 @@ def _prepare_config_state(cfg: AppConfig) -> dict[str, object]:
         dssp_path = find_dssp_binary()
     return {
         "cache_version": PREPARE_CACHE_VERSION,
+        "chain_id": str(getattr(cfg.input, "chain_id", "") or ""),
         "dssp_bin_path": str(dssp_path or ""),
         "dssp_bin_state": _executable_state(dssp_path),
         "fail_on_dssp_error": bool(cfg.runtime.fail_on_dssp_error),
@@ -181,6 +182,8 @@ def _normalize_payloads(payloads: object) -> list[dict[str, object]] | None:
                 "filename": str(payload.get("filename", "")),
                 "source_path": str(payload.get("source_path", "")),
                 "chain": str(payload.get("chain", "")),
+                "dssp_status": str(payload.get("dssp_status", "")),
+                "dssp_error": str(payload.get("dssp_error", "")),
                 "residues_data": normalized_residues,
             }
         )
@@ -228,6 +231,8 @@ def store_prepare_payloads(file_path: str, cfg: AppConfig, payloads: list[dict[s
     cache_path = prepare_cache_path(file_path, cfg)
     normalized_payloads = _normalize_payloads(payloads)
     if normalized_payloads is None:
+        return
+    if any(str(payload.get("dssp_error", "")).strip() for payload in normalized_payloads):
         return
 
     tmp_path: str | None = None

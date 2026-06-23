@@ -4,7 +4,7 @@ from math import pi
 
 DEFAULT_INPUT_PATH = ""
 DEFAULT_OUTPUT_CSV = "beta_barrel_detection_results.csv"
-DEFAULT_ALLOWED_SUFFIXES = (".pdb", ".cif", ".mmcif")
+DEFAULT_ALLOWED_SUFFIXES = (".pdb", ".cif", ".mmcif", ".pdb.gz", ".cif.gz", ".mmcif.gz")
 DEFAULT_SLICE_STEP_SIZE = 1.0
 DEFAULT_FILL_SHEET_HOLE_LENGTH = 0
 
@@ -29,7 +29,7 @@ RESULT_BARREL = "BARREL"
 RESULT_NON_BARREL = "NON_BARREL"
 RESULT_FILTERED_OUT = "FILTERED_OUT"
 RESULT_ERROR = "ERROR"
-LEGACY_RESULT_SKIP = "SKIP"
+COMPAT_RESULT_SKIP = "SKIP"
 
 DEFAULT_RESULT_COLUMNS = (
     "filename",
@@ -37,6 +37,9 @@ DEFAULT_RESULT_COLUMNS = (
     "chain",
     "result",
     "result_stage",
+    "score_type",
+    "calibration_status",
+    "config_profile",
     "decision_score",
     "decision_basis",
     "decision_threshold",

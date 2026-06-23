@@ -9,12 +9,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[5]
 SRC_DIR = REPO / "src"
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from betlas.readouts.beta_barrel_staves.external_baselines import (  # noqa: E402
+from scripts.reproducibility.readouts.beta_barrel_staves.external_baselines import (  # noqa: E402
     build_external_baseline_manifest,
     build_external_method_manifest,
     write_json,

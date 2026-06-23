@@ -9,8 +9,10 @@ from typing import Any
 import numpy as np
 
 from ..constants import DIAGNOSTIC_PREFIX, FOLD_LABELS
-from ..io.mmcif import build_structure_geometry
+from ..io.mmcif import available_auth_chain_ids, build_structure_geometry, is_mmcif_path
 from ..models import DomainCandidate, GeometrySignature, StructureGeometry
+from ..schema import _is_compatibility_column
+from ..slicing import SliceConfig, _compute_axis_slice_summary
 from .geometry import (
     EPS,
     angular_coverage,
@@ -123,9 +125,9 @@ def _sequence_features(geometry: StructureGeometry) -> dict[str, float]:
     elements.sort()
     if len(elements) < 2:
         return {
-            "cz_beta_alpha_alternation_fraction": 0.0,
-            "cz_beta_alpha_repeat_pairs": 0.0,
-            "cz_sse_count": float(len(elements)),
+            "betlas_beta_alpha_alternation_fraction": 0.0,
+            "betlas_beta_alpha_repeat_pairs": 0.0,
+            "betlas_sse_count": float(len(elements)),
         }
     transitions = 0
     repeat_pairs = 0
@@ -135,9 +137,9 @@ def _sequence_features(geometry: StructureGeometry) -> dict[str, float]:
         if left[1] == "B" and right[1] == "H":
             repeat_pairs += 1
     return {
-        "cz_beta_alpha_alternation_fraction": transitions / max(1, len(elements) - 1),
-        "cz_beta_alpha_repeat_pairs": float(repeat_pairs),
-        "cz_sse_count": float(len(elements)),
+        "betlas_beta_alpha_alternation_fraction": transitions / max(1, len(elements) - 1),
+        "betlas_beta_alpha_repeat_pairs": float(repeat_pairs),
+        "betlas_sse_count": float(len(elements)),
     }
 
 
@@ -148,12 +150,12 @@ def _sheet_features(geometry: StructureGeometry, axis_origin: np.ndarray, axis_d
         by_sheet[item.element.sheet_id or "unknown"].append(item)
     sheet_sizes = [len(items) for items in by_sheet.values()]
     features: dict[str, float] = {
-        "cz_sheet_count": float(len(by_sheet)),
-        "cz_sheet_face_count": float(sum(size >= 2 for size in sheet_sizes)),
-        "cz_largest_sheet_fraction": max(sheet_sizes) / max(1, len(beta_geoms)) if sheet_sizes else 0.0,
-        "cz_sheet_size_entropy": entropy(np.array([item.element.sheet_id for item in beta_geoms])),
+        "betlas_sheet_count": float(len(by_sheet)),
+        "betlas_sheet_face_count": float(sum(size >= 2 for size in sheet_sizes)),
+        "betlas_largest_sheet_fraction": max(sheet_sizes) / max(1, len(beta_geoms)) if sheet_sizes else 0.0,
+        "betlas_sheet_size_entropy": entropy(np.array([item.element.sheet_id for item in beta_geoms])),
     }
-    features.update(_summary(sheet_sizes, "cz_sheet_strand_count"))
+    features.update(_summary(sheet_sizes, "betlas_sheet_strand_count"))
 
     sheet_spans: list[float] = []
     planarity: list[float] = []
@@ -177,10 +179,10 @@ def _sheet_features(geometry: StructureGeometry, axis_origin: np.ndarray, axis_d
             upper = dots[np.triu_indices_from(dots, k=1)]
             normal_changes.append(float(np.mean(np.arccos(upper) / math.pi)) if len(upper) else 0.0)
 
-    features.update(_summary(sheet_spans, "cz_sheet_angular_span"))
-    features.update(_summary(planarity, "cz_sheet_planarity_residual"))
-    features.update(_summary(normal_changes, "cz_sheet_axis_dispersion"))
-    features["cz_sheet_angular_span_max"] = features.get("cz_sheet_angular_span_max", 0.0)
+    features.update(_summary(sheet_spans, "betlas_sheet_angular_span"))
+    features.update(_summary(planarity, "betlas_sheet_planarity_residual"))
+    features.update(_summary(normal_changes, "betlas_sheet_axis_dispersion"))
+    features["betlas_sheet_angular_span_max"] = features.get("betlas_sheet_angular_span_max", 0.0)
     return features
 
 
@@ -195,14 +197,14 @@ def _beta_run_features(
     segment_count = len(geometry.beta_segments)
     if not runs:
         return {
-            "cz_beta_run_count": 0.0,
-            "cz_beta_segment_to_run_ratio": 0.0,
-            "cz_beta_run_eight_score": 0.0,
-            "cz_beta_run_sheet_multiplicity_mean": 0.0,
-            "cz_beta_run_sheet_multiplicity_max": 0.0,
-            "cz_beta_run_multi_sheet_fraction": 0.0,
-            "cz_beta_run_angular_coverage": 0.0,
-            "cz_beta_run_largest_gap_fraction": 1.0,
+            "betlas_beta_run_count": 0.0,
+            "betlas_beta_segment_to_run_ratio": 0.0,
+            "betlas_beta_run_eight_score": 0.0,
+            "betlas_beta_run_sheet_multiplicity_mean": 0.0,
+            "betlas_beta_run_sheet_multiplicity_max": 0.0,
+            "betlas_beta_run_multi_sheet_fraction": 0.0,
+            "betlas_beta_run_angular_coverage": 0.0,
+            "betlas_beta_run_largest_gap_fraction": 1.0,
         }
 
     run_midpoints: list[np.ndarray] = []
@@ -219,16 +221,16 @@ def _beta_run_features(
     multiplicities = [float(run["sheet_multiplicity"]) for run in runs]
     lengths = [float(run["length"]) for run in runs]
     features = {
-        "cz_beta_run_count": float(run_count),
-        "cz_beta_segment_to_run_ratio": _safe_ratio(segment_count, run_count),
-        "cz_beta_run_eight_score": _bell(float(run_count), 8.0, 2.0),
-        "cz_beta_run_sheet_multiplicity_mean": float(np.mean(multiplicities)),
-        "cz_beta_run_sheet_multiplicity_max": float(np.max(multiplicities)),
-        "cz_beta_run_multi_sheet_fraction": float(np.mean(np.asarray(multiplicities) > 1.0)),
-        "cz_beta_run_angular_coverage": float(coverage),
-        "cz_beta_run_largest_gap_fraction": float(largest_gap / (2.0 * math.pi)),
+        "betlas_beta_run_count": float(run_count),
+        "betlas_beta_segment_to_run_ratio": _safe_ratio(segment_count, run_count),
+        "betlas_beta_run_eight_score": _bell(float(run_count), 8.0, 2.0),
+        "betlas_beta_run_sheet_multiplicity_mean": float(np.mean(multiplicities)),
+        "betlas_beta_run_sheet_multiplicity_max": float(np.max(multiplicities)),
+        "betlas_beta_run_multi_sheet_fraction": float(np.mean(np.asarray(multiplicities) > 1.0)),
+        "betlas_beta_run_angular_coverage": float(coverage),
+        "betlas_beta_run_largest_gap_fraction": float(largest_gap / (2.0 * math.pi)),
     }
-    features.update(_summary(lengths, "cz_beta_run_length"))
+    features.update(_summary(lengths, "betlas_beta_run_length"))
     return features
 
 
@@ -256,20 +258,20 @@ def _sheet_pair_packing_features(
     ranked, _by_sheet = _top_sheet_items(geometry)
     total_segments = len(geometry.beta_segments)
     empty = {
-        "cz_sheet_pair_top2_fraction": 0.0,
-        "cz_sheet_pair_size_balance": 0.0,
-        "cz_sheet_pair_centroid_distance": 0.0,
-        "cz_sheet_pair_centroid_distance_norm": 0.0,
-        "cz_sheet_pair_angular_separation_fraction": 0.0,
-        "cz_sheet_pair_normal_abs_dot": 0.0,
-        "cz_sheet_pair_face_alignment": 0.0,
-        "cz_sheet_pair_cross_min_distance": 0.0,
-        "cz_sheet_pair_cross_distance_mean": 0.0,
-        "cz_sheet_pair_cross_contact_density8": 0.0,
-        "cz_sheet_pair_cross_contact_density10": 0.0,
-        "cz_sheet_pair_reciprocal_nearest_fraction8": 0.0,
-        "cz_sheet_pair_bilayer_score": 0.0,
-        "cz_sheet_pair_lobe_score": 0.0,
+        "betlas_sheet_pair_top2_fraction": 0.0,
+        "betlas_sheet_pair_size_balance": 0.0,
+        "betlas_sheet_pair_centroid_distance": 0.0,
+        "betlas_sheet_pair_centroid_distance_norm": 0.0,
+        "betlas_sheet_pair_angular_separation_fraction": 0.0,
+        "betlas_sheet_pair_normal_abs_dot": 0.0,
+        "betlas_sheet_pair_face_alignment": 0.0,
+        "betlas_sheet_pair_cross_min_distance": 0.0,
+        "betlas_sheet_pair_cross_distance_mean": 0.0,
+        "betlas_sheet_pair_cross_contact_density8": 0.0,
+        "betlas_sheet_pair_cross_contact_density10": 0.0,
+        "betlas_sheet_pair_reciprocal_nearest_fraction8": 0.0,
+        "betlas_sheet_pair_bilayer_score": 0.0,
+        "betlas_sheet_pair_lobe_score": 0.0,
     }
     if len(ranked) < 2 or total_segments == 0:
         return empty
@@ -325,21 +327,21 @@ def _sheet_pair_packing_features(
     )
     lobe_score = top2_fraction * size_balance * normal_abs_dot * angular_sep
     return {
-        "cz_sheet_pair_top2_fraction": float(top2_fraction),
-        "cz_sheet_pair_size_balance": float(size_balance),
-        "cz_sheet_pair_centroid_distance": center_distance,
-        "cz_sheet_pair_centroid_distance_norm": _safe_ratio(center_distance, radial_scale + 1.0),
-        "cz_sheet_pair_angular_separation_fraction": float(angular_sep),
-        "cz_sheet_pair_normal_abs_dot": float(normal_abs_dot),
-        "cz_sheet_pair_face_alignment": float(face_alignment),
-        "cz_sheet_pair_cross_min_distance": float(np.min(pair_arr)) if len(pair_arr) else 0.0,
-        "cz_sheet_pair_cross_distance_mean": float(np.mean(pair_arr)) if len(pair_arr) else 0.0,
-        "cz_sheet_pair_cross_contact_density8": float(np.mean(pair_arr <= 8.0)) if len(pair_arr) else 0.0,
-        "cz_sheet_pair_cross_contact_density10": float(np.mean(pair_arr <= 10.0)) if len(pair_arr) else 0.0,
-        "cz_sheet_pair_reciprocal_nearest_fraction8": float(np.mean(nearest <= 8.0)) if len(nearest) else 0.0,
-        "cz_sheet_pair_bilayer_score": float(bilayer_score),
-        "cz_sheet_pair_lobe_score": float(lobe_score),
-        "cz_sheet_pair_top_sheet_ids_equal": 1.0 if sheet_a == sheet_b else 0.0,
+        "betlas_sheet_pair_top2_fraction": float(top2_fraction),
+        "betlas_sheet_pair_size_balance": float(size_balance),
+        "betlas_sheet_pair_centroid_distance": center_distance,
+        "betlas_sheet_pair_centroid_distance_norm": _safe_ratio(center_distance, radial_scale + 1.0),
+        "betlas_sheet_pair_angular_separation_fraction": float(angular_sep),
+        "betlas_sheet_pair_normal_abs_dot": float(normal_abs_dot),
+        "betlas_sheet_pair_face_alignment": float(face_alignment),
+        "betlas_sheet_pair_cross_min_distance": float(np.min(pair_arr)) if len(pair_arr) else 0.0,
+        "betlas_sheet_pair_cross_distance_mean": float(np.mean(pair_arr)) if len(pair_arr) else 0.0,
+        "betlas_sheet_pair_cross_contact_density8": float(np.mean(pair_arr <= 8.0)) if len(pair_arr) else 0.0,
+        "betlas_sheet_pair_cross_contact_density10": float(np.mean(pair_arr <= 10.0)) if len(pair_arr) else 0.0,
+        "betlas_sheet_pair_reciprocal_nearest_fraction8": float(np.mean(nearest <= 8.0)) if len(nearest) else 0.0,
+        "betlas_sheet_pair_bilayer_score": float(bilayer_score),
+        "betlas_sheet_pair_lobe_score": float(lobe_score),
+        "betlas_sheet_pair_top_sheet_ids_equal": 1.0 if sheet_a == sheet_b else 0.0,
     }
 
 
@@ -348,13 +350,13 @@ def _sheet_sequence_topology_features(geometry: StructureGeometry) -> dict[str, 
     ranked, _by_sheet = _top_sheet_items(geometry)
     if len(runs) < 2 or len(ranked) < 2:
         return {
-            "cz_sheet_seq_top2_run_fraction": 0.0,
-            "cz_sheet_seq_top2_transition_fraction": 0.0,
-            "cz_sheet_seq_top2_block_count": 0.0,
-            "cz_sheet_seq_top2_longest_block_fraction": 0.0,
-            "cz_sheet_seq_top2_interleave_score": 0.0,
-            "cz_sheet_seq_top2_order_displacement": 0.0,
-            "cz_sheet_seq_greek_key_proxy": 0.0,
+            "betlas_sheet_seq_top2_run_fraction": 0.0,
+            "betlas_sheet_seq_top2_transition_fraction": 0.0,
+            "betlas_sheet_seq_top2_block_count": 0.0,
+            "betlas_sheet_seq_top2_longest_block_fraction": 0.0,
+            "betlas_sheet_seq_top2_interleave_score": 0.0,
+            "betlas_sheet_seq_top2_order_displacement": 0.0,
+            "betlas_sheet_seq_greek_key_proxy": 0.0,
         }
 
     top2 = {ranked[0][0], ranked[1][0]}
@@ -363,13 +365,13 @@ def _sheet_sequence_topology_features(geometry: StructureGeometry) -> dict[str, 
     top2_labels = [label for label, keep in zip(labels, top2_mask, strict=False) if keep]
     if len(top2_labels) < 2:
         return {
-            "cz_sheet_seq_top2_run_fraction": len(top2_labels) / max(1, len(runs)),
-            "cz_sheet_seq_top2_transition_fraction": 0.0,
-            "cz_sheet_seq_top2_block_count": float(len(top2_labels)),
-            "cz_sheet_seq_top2_longest_block_fraction": 1.0 if top2_labels else 0.0,
-            "cz_sheet_seq_top2_interleave_score": 0.0,
-            "cz_sheet_seq_top2_order_displacement": 0.0,
-            "cz_sheet_seq_greek_key_proxy": 0.0,
+            "betlas_sheet_seq_top2_run_fraction": len(top2_labels) / max(1, len(runs)),
+            "betlas_sheet_seq_top2_transition_fraction": 0.0,
+            "betlas_sheet_seq_top2_block_count": float(len(top2_labels)),
+            "betlas_sheet_seq_top2_longest_block_fraction": 1.0 if top2_labels else 0.0,
+            "betlas_sheet_seq_top2_interleave_score": 0.0,
+            "betlas_sheet_seq_top2_order_displacement": 0.0,
+            "betlas_sheet_seq_greek_key_proxy": 0.0,
         }
     switches = [
         1 if left != right else 0
@@ -421,13 +423,13 @@ def _sheet_sequence_topology_features(geometry: StructureGeometry) -> dict[str, 
         * (0.5 * transition_fraction + 0.5 * displacement)
     )
     return {
-        "cz_sheet_seq_top2_run_fraction": float(run_fraction),
-        "cz_sheet_seq_top2_transition_fraction": transition_fraction,
-        "cz_sheet_seq_top2_block_count": float(len(block_lengths)),
-        "cz_sheet_seq_top2_longest_block_fraction": float(longest_block_fraction),
-        "cz_sheet_seq_top2_interleave_score": float(interleave_score),
-        "cz_sheet_seq_top2_order_displacement": float(displacement),
-        "cz_sheet_seq_greek_key_proxy": float(greek_key_proxy),
+        "betlas_sheet_seq_top2_run_fraction": float(run_fraction),
+        "betlas_sheet_seq_top2_transition_fraction": transition_fraction,
+        "betlas_sheet_seq_top2_block_count": float(len(block_lengths)),
+        "betlas_sheet_seq_top2_longest_block_fraction": float(longest_block_fraction),
+        "betlas_sheet_seq_top2_interleave_score": float(interleave_score),
+        "betlas_sheet_seq_top2_order_displacement": float(displacement),
+        "betlas_sheet_seq_greek_key_proxy": float(greek_key_proxy),
     }
 
 
@@ -457,14 +459,14 @@ def _sheet_order_topology_features(geometry: StructureGeometry) -> dict[str, flo
     segments = list(geometry.beta_segments)
     if len(segments) < 3:
         return {
-            "cz_sheet_order_adjacent_seq_step_mean": 0.0,
-            "cz_sheet_order_adjacent_seq_step_max": 0.0,
-            "cz_sheet_order_nonlocal_fraction": 0.0,
-            "cz_sheet_order_inversion_fraction_mean": 0.0,
-            "cz_top2_sheet_order_adjacent_seq_step_mean": 0.0,
-            "cz_top2_sheet_order_nonlocal_fraction": 0.0,
-            "cz_top2_sheet_order_inversion_fraction_mean": 0.0,
-            "cz_jelly_roll_order_nonlocal_score": 0.0,
+            "betlas_sheet_order_adjacent_seq_step_mean": 0.0,
+            "betlas_sheet_order_adjacent_seq_step_max": 0.0,
+            "betlas_sheet_order_nonlocal_fraction": 0.0,
+            "betlas_sheet_order_inversion_fraction_mean": 0.0,
+            "betlas_top2_sheet_order_adjacent_seq_step_mean": 0.0,
+            "betlas_top2_sheet_order_nonlocal_fraction": 0.0,
+            "betlas_top2_sheet_order_inversion_fraction_mean": 0.0,
+            "betlas_jelly_roll_order_nonlocal_score": 0.0,
         }
 
     seq_order = sorted(range(len(segments)), key=lambda idx: segments[idx].start_auth_seq_id)
@@ -511,14 +513,14 @@ def _sheet_order_topology_features(geometry: StructureGeometry) -> dict[str, flo
     top2_nonlocal_mean = float(np.mean(top2_nonlocal)) if top2_nonlocal else 0.0
     top2_inv_mean = float(np.mean(top2_inversions)) if top2_inversions else 0.0
     return {
-        "cz_sheet_order_adjacent_seq_step_mean": float(np.mean(all_steps)) if all_steps else 0.0,
-        "cz_sheet_order_adjacent_seq_step_max": float(np.max(all_steps)) if all_steps else 0.0,
-        "cz_sheet_order_nonlocal_fraction": float(np.mean(all_nonlocal)) if all_nonlocal else 0.0,
-        "cz_sheet_order_inversion_fraction_mean": float(np.mean(all_inversions)) if all_inversions else 0.0,
-        "cz_top2_sheet_order_adjacent_seq_step_mean": float(np.mean(top2_steps)) if top2_steps else 0.0,
-        "cz_top2_sheet_order_nonlocal_fraction": top2_nonlocal_mean,
-        "cz_top2_sheet_order_inversion_fraction_mean": top2_inv_mean,
-        "cz_jelly_roll_order_nonlocal_score": float(
+        "betlas_sheet_order_adjacent_seq_step_mean": float(np.mean(all_steps)) if all_steps else 0.0,
+        "betlas_sheet_order_adjacent_seq_step_max": float(np.max(all_steps)) if all_steps else 0.0,
+        "betlas_sheet_order_nonlocal_fraction": float(np.mean(all_nonlocal)) if all_nonlocal else 0.0,
+        "betlas_sheet_order_inversion_fraction_mean": float(np.mean(all_inversions)) if all_inversions else 0.0,
+        "betlas_top2_sheet_order_adjacent_seq_step_mean": float(np.mean(top2_steps)) if top2_steps else 0.0,
+        "betlas_top2_sheet_order_nonlocal_fraction": top2_nonlocal_mean,
+        "betlas_top2_sheet_order_inversion_fraction_mean": top2_inv_mean,
+        "betlas_jelly_roll_order_nonlocal_score": float(
             top2_run_fraction * (0.5 * top2_nonlocal_mean + 0.5 * top2_inv_mean) * run_eight
         ),
     }
@@ -529,13 +531,13 @@ def _contact_graph_features(geometry: StructureGeometry) -> dict[str, float]:
     n = len(beta_geoms)
     if n < 2:
         return {
-            "cz_contact8_edge_density": 0.0,
-            "cz_contact10_edge_density": 0.0,
-            "cz_contact8_cross_sheet_fraction": 0.0,
-            "cz_contact8_component_count": float(n),
-            "cz_contact8_largest_component_fraction": float(n),
-            "cz_contact8_cycle_rank_norm": 0.0,
-            "cz_contact8_degree2_fraction": 0.0,
+            "betlas_contact8_edge_density": 0.0,
+            "betlas_contact10_edge_density": 0.0,
+            "betlas_contact8_cross_sheet_fraction": 0.0,
+            "betlas_contact8_component_count": float(n),
+            "betlas_contact8_largest_component_fraction": float(n),
+            "betlas_contact8_cycle_rank_norm": 0.0,
+            "betlas_contact8_degree2_fraction": 0.0,
         }
     edges8: list[tuple[int, int]] = []
     edges10: list[tuple[int, int]] = []
@@ -575,13 +577,13 @@ def _contact_graph_features(geometry: StructureGeometry) -> dict[str, float]:
     degrees = np.array([len(neighbors) for neighbors in adjacency], dtype=float)
     possible_edges = n * (n - 1) / 2
     return {
-        "cz_contact8_edge_density": _safe_ratio(len(edges8), possible_edges),
-        "cz_contact10_edge_density": _safe_ratio(len(edges10), possible_edges),
-        "cz_contact8_cross_sheet_fraction": _safe_ratio(cross8, len(edges8)),
-        "cz_contact8_component_count": float(component_count),
-        "cz_contact8_largest_component_fraction": max(component_sizes) / max(1, n),
-        "cz_contact8_cycle_rank_norm": _safe_ratio(cycle_rank, n),
-        "cz_contact8_degree2_fraction": float(np.mean(degrees == 2.0)),
+        "betlas_contact8_edge_density": _safe_ratio(len(edges8), possible_edges),
+        "betlas_contact10_edge_density": _safe_ratio(len(edges10), possible_edges),
+        "betlas_contact8_cross_sheet_fraction": _safe_ratio(cross8, len(edges8)),
+        "betlas_contact8_component_count": float(component_count),
+        "betlas_contact8_largest_component_fraction": max(component_sizes) / max(1, n),
+        "betlas_contact8_cycle_rank_norm": _safe_ratio(cycle_rank, n),
+        "betlas_contact8_degree2_fraction": float(np.mean(degrees == 2.0)),
     }
 
 
@@ -590,12 +592,12 @@ def _contact_sequence_topology_features(geometry: StructureGeometry) -> dict[str
     n = len(beta_geoms)
     if n < 2:
         return {
-            "cz_contact8_seq_gap_mean": 0.0,
-            "cz_contact8_seq_gap_max": 0.0,
-            "cz_contact8_nonlocal_fraction": 0.0,
-            "cz_contact8_cross_sheet_nonlocal_fraction": 0.0,
-            "cz_contact10_seq_gap_mean": 0.0,
-            "cz_contact10_nonlocal_fraction": 0.0,
+            "betlas_contact8_seq_gap_mean": 0.0,
+            "betlas_contact8_seq_gap_max": 0.0,
+            "betlas_contact8_nonlocal_fraction": 0.0,
+            "betlas_contact8_cross_sheet_nonlocal_fraction": 0.0,
+            "betlas_contact10_seq_gap_mean": 0.0,
+            "betlas_contact10_nonlocal_fraction": 0.0,
         }
     seq_order = sorted(range(n), key=lambda idx: beta_geoms[idx].element.start_auth_seq_id)
     seq_rank = {idx: rank for rank, idx in enumerate(seq_order)}
@@ -613,14 +615,14 @@ def _contact_sequence_topology_features(geometry: StructureGeometry) -> dict[str
                 if beta_geoms[i].element.sheet_id != beta_geoms[j].element.sheet_id:
                     cross_nonlocal8.append(1.0 if gap > 2.0 else 0.0)
     return {
-        "cz_contact8_seq_gap_mean": float(np.mean(gaps8)) if gaps8 else 0.0,
-        "cz_contact8_seq_gap_max": float(np.max(gaps8)) if gaps8 else 0.0,
-        "cz_contact8_nonlocal_fraction": float(np.mean(np.asarray(gaps8) > 2.0)) if gaps8 else 0.0,
-        "cz_contact8_cross_sheet_nonlocal_fraction": float(np.mean(cross_nonlocal8))
+        "betlas_contact8_seq_gap_mean": float(np.mean(gaps8)) if gaps8 else 0.0,
+        "betlas_contact8_seq_gap_max": float(np.max(gaps8)) if gaps8 else 0.0,
+        "betlas_contact8_nonlocal_fraction": float(np.mean(np.asarray(gaps8) > 2.0)) if gaps8 else 0.0,
+        "betlas_contact8_cross_sheet_nonlocal_fraction": float(np.mean(cross_nonlocal8))
         if cross_nonlocal8
         else 0.0,
-        "cz_contact10_seq_gap_mean": float(np.mean(gaps10)) if gaps10 else 0.0,
-        "cz_contact10_nonlocal_fraction": float(np.mean(np.asarray(gaps10) > 2.0)) if gaps10 else 0.0,
+        "betlas_contact10_seq_gap_mean": float(np.mean(gaps10)) if gaps10 else 0.0,
+        "betlas_contact10_nonlocal_fraction": float(np.mean(np.asarray(gaps10) > 2.0)) if gaps10 else 0.0,
     }
 
 
@@ -632,13 +634,13 @@ def _angular_lobe_features(
 ) -> dict[str, float]:
     if len(segment_midpoints) < 3:
         return {
-            "cz_angular_fft_k1": 0.0,
-            "cz_angular_fft_k2": 0.0,
-            "cz_angular_fft_k2_dominance": 0.0,
-            "cz_angular_sector_occupancy12": 0.0,
-            "cz_angular_sector_entropy12": 0.0,
-            "cz_barrel_wall_continuity_score": 0.0,
-            "cz_sandwich_lobe_guard_score": 0.0,
+            "betlas_angular_fft_k1": 0.0,
+            "betlas_angular_fft_k2": 0.0,
+            "betlas_angular_fft_k2_dominance": 0.0,
+            "betlas_angular_sector_occupancy12": 0.0,
+            "betlas_angular_sector_entropy12": 0.0,
+            "betlas_barrel_wall_continuity_score": 0.0,
+            "betlas_sandwich_lobe_guard_score": 0.0,
         }
     xy, _z, _xyz = project_to_axis(segment_midpoints, origin, axis)
     angles = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * math.pi)
@@ -652,22 +654,22 @@ def _angular_lobe_features(
     sector_entropy = entropy(np.repeat(np.arange(12), sectors)) if int(np.sum(sectors)) else 0.0
     k1 = float(fft_norm[1]) if len(fft_norm) > 1 else 0.0
     k2 = float(fft_norm[2]) if len(fft_norm) > 2 else 0.0
-    kmax = max(k1, k2, float(base_features.get("cz_angular_fft_k3_8_max", 0.0)))
-    closure = float(base_features.get("cz_axis_best_slice_coverage_median", 0.0))
-    continuity = float(base_features.get("cz_z_continuity_fraction", 0.0))
-    largest_sheet = float(base_features.get("cz_largest_sheet_fraction", 0.0))
-    bilayer = float(base_features.get("cz_sheet_pair_bilayer_score", 0.0))
-    lobe = float(base_features.get("cz_sheet_pair_lobe_score", 0.0))
+    kmax = max(k1, k2, float(base_features.get("betlas_angular_fft_k3_8_max", 0.0)))
+    closure = float(base_features.get("betlas_axis_best_slice_coverage_median", 0.0))
+    continuity = float(base_features.get("betlas_z_continuity_fraction", 0.0))
+    largest_sheet = float(base_features.get("betlas_largest_sheet_fraction", 0.0))
+    bilayer = float(base_features.get("betlas_sheet_pair_bilayer_score", 0.0))
+    lobe = float(base_features.get("betlas_sheet_pair_lobe_score", 0.0))
     barrel_wall = closure * continuity * largest_sheet * (1.0 - min(1.0, k2 / (kmax + EPS)))
     sandwich_guard = k2 * bilayer + 0.5 * lobe
     return {
-        "cz_angular_fft_k1": k1,
-        "cz_angular_fft_k2": k2,
-        "cz_angular_fft_k2_dominance": k2 / (kmax + EPS),
-        "cz_angular_sector_occupancy12": occupied,
-        "cz_angular_sector_entropy12": float(sector_entropy),
-        "cz_barrel_wall_continuity_score": float(barrel_wall),
-        "cz_sandwich_lobe_guard_score": float(sandwich_guard),
+        "betlas_angular_fft_k1": k1,
+        "betlas_angular_fft_k2": k2,
+        "betlas_angular_fft_k2_dominance": k2 / (kmax + EPS),
+        "betlas_angular_sector_occupancy12": occupied,
+        "betlas_angular_sector_entropy12": float(sector_entropy),
+        "betlas_barrel_wall_continuity_score": float(barrel_wall),
+        "betlas_sandwich_lobe_guard_score": float(sandwich_guard),
     }
 
 
@@ -679,59 +681,14 @@ def _axis_slice_features(
     *,
     min_points_per_slice: int = 4,
 ) -> dict[str, float]:
-    xy_mid, z_mid, _xyz_mid = project_to_axis(segment_midpoints, origin, axis)
-    angles_mid = np.arctan2(xy_mid[:, 1], xy_mid[:, 0]) if len(xy_mid) else np.array([])
-    coverage_all, largest_gap = angular_coverage(angles_mid)
-    radii_mid = np.linalg.norm(xy_mid, axis=1) if len(xy_mid) else np.array([])
-
-    xy_points, z_points, _xyz_points = project_to_axis(beta_points, origin, axis)
-    if len(z_points) == 0:
-        return {
-            "angular_coverage": 0.0,
-            "largest_gap_fraction": 1.0,
-            "radius_cv": 0.0,
-            "z_range": 0.0,
-            "z_continuity_fraction": 0.0,
-            "slice_count": 0.0,
-            "slice_coverage_mean": 0.0,
-            "slice_coverage_median": 0.0,
-            "slice_coverage_std": 0.0,
-            "slice_high_coverage_fraction": 0.0,
-            "slice_largest_gap_fraction_mean": 1.0,
-        }
-
-    z_min, z_max = float(np.min(z_points)), float(np.max(z_points))
-    z_range = max(0.0, z_max - z_min)
-    bins = max(4, min(24, int(math.ceil(z_range / 4.0)) if z_range > EPS else 4))
-    edges = np.linspace(z_min, z_max + EPS, bins + 1)
-    coverages: list[float] = []
-    gap_fracs: list[float] = []
-    occupied = 0
-    point_angles = np.arctan2(xy_points[:, 1], xy_points[:, 0])
-    for left, right in zip(edges[:-1], edges[1:], strict=False):
-        mask = (z_points >= left) & (z_points < right)
-        if int(np.sum(mask)) < min_points_per_slice:
-            continue
-        occupied += 1
-        cov, gap = angular_coverage(point_angles[mask])
-        coverages.append(cov)
-        gap_fracs.append(gap / (2.0 * math.pi))
-
-    radius_mean = float(np.mean(radii_mid)) if len(radii_mid) else 0.0
-    radius_std = float(np.std(radii_mid)) if len(radii_mid) else 0.0
-    return {
-        "angular_coverage": float(coverage_all),
-        "largest_gap_fraction": float(largest_gap / (2.0 * math.pi)),
-        "radius_cv": radius_std / (radius_mean + EPS),
-        "z_range": z_range,
-        "z_continuity_fraction": occupied / max(1, bins),
-        "slice_count": float(occupied),
-        "slice_coverage_mean": float(np.mean(coverages)) if coverages else 0.0,
-        "slice_coverage_median": float(np.median(coverages)) if coverages else 0.0,
-        "slice_coverage_std": float(np.std(coverages)) if coverages else 0.0,
-        "slice_high_coverage_fraction": float(np.mean(np.asarray(coverages) >= 0.75)) if coverages else 0.0,
-        "slice_largest_gap_fraction_mean": float(np.mean(gap_fracs)) if gap_fracs else 1.0,
-    }
+    summary, _bins = _compute_axis_slice_summary(
+        beta_points,
+        segment_midpoints,
+        origin,
+        axis,
+        config=SliceConfig(min_points_per_slice=min_points_per_slice),
+    )
+    return summary
 
 
 def _axis_periodicity_features(
@@ -741,10 +698,10 @@ def _axis_periodicity_features(
 ) -> dict[str, float]:
     if len(segment_midpoints) < 4:
         return {
-            "cz_axis_periodicity_score": 0.0,
-            "cz_angular_fft_k3_8_max": 0.0,
-            "cz_angular_fft_k3_8_best_k": 0.0,
-            **{f"cz_angular_fft_k{k}": 0.0 for k in range(3, 9)},
+            "betlas_axis_periodicity_score": 0.0,
+            "betlas_angular_fft_k3_8_max": 0.0,
+            "betlas_angular_fft_k3_8_best_k": 0.0,
+            **{f"betlas_angular_fft_k{k}": 0.0 for k in range(3, 9)},
         }
     xy, z, _xyz = project_to_axis(segment_midpoints, origin, axis)
     angles = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * math.pi)
@@ -758,7 +715,7 @@ def _axis_periodicity_features(
     best_val = 0.0
     for k in range(3, 9):
         value = float(fft[k]) if k < len(fft) else 0.0
-        harmonics[f"cz_angular_fft_k{k}"] = value
+        harmonics[f"betlas_angular_fft_k{k}"] = value
         if value > best_val:
             best_val = value
             best_k = k
@@ -775,9 +732,9 @@ def _axis_periodicity_features(
     else:
         helical_r2 = 0.0
     return {
-        "cz_axis_periodicity_score": float(0.5 * helical_r2 + 0.5 * best_val),
-        "cz_angular_fft_k3_8_max": best_val,
-        "cz_angular_fft_k3_8_best_k": float(best_k),
+        "betlas_axis_periodicity_score": float(0.5 * helical_r2 + 0.5 * best_val),
+        "betlas_angular_fft_k3_8_max": best_val,
+        "betlas_angular_fft_k3_8_best_k": float(best_k),
         **harmonics,
     }
 
@@ -791,11 +748,11 @@ def _strand_order_features(
     n = len(segment_midpoints)
     if n < 3:
         return {
-            "cz_strand_order_displacement_mean": 0.0,
-            "cz_strand_order_adjacent_seq_step_median": 0.0,
-            "cz_strand_ntc_parallel_fraction": 0.0,
-            "cz_strand_ntc_antiparallel_fraction": 0.0,
-            "cz_strand_axis_abs_alignment_mean": 0.0,
+            "betlas_strand_order_displacement_mean": 0.0,
+            "betlas_strand_order_adjacent_seq_step_median": 0.0,
+            "betlas_strand_ntc_parallel_fraction": 0.0,
+            "betlas_strand_ntc_antiparallel_fraction": 0.0,
+            "betlas_strand_axis_abs_alignment_mean": 0.0,
         }
     xy, _z, _xyz = project_to_axis(segment_midpoints, origin, axis)
     angles = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * math.pi)
@@ -823,11 +780,11 @@ def _strand_order_features(
         abs_alignment = 0.0
 
     return {
-        "cz_strand_order_displacement_mean": displacement,
-        "cz_strand_order_adjacent_seq_step_median": float(np.median(cyclic_steps)),
-        "cz_strand_ntc_parallel_fraction": parallel_fraction,
-        "cz_strand_ntc_antiparallel_fraction": antiparallel_fraction,
-        "cz_strand_axis_abs_alignment_mean": abs_alignment,
+        "betlas_strand_order_displacement_mean": displacement,
+        "betlas_strand_order_adjacent_seq_step_median": float(np.median(cyclic_steps)),
+        "betlas_strand_ntc_parallel_fraction": parallel_fraction,
+        "betlas_strand_ntc_antiparallel_fraction": antiparallel_fraction,
+        "betlas_strand_axis_abs_alignment_mean": abs_alignment,
     }
 
 
@@ -840,8 +797,8 @@ def _alpha_shell_features(
     helix_geoms = helix_element_geometries(geometry)
     if not beta_geoms or not helix_geoms:
         return {
-            "cz_alpha_shell_radial_delta": 0.0,
-            "cz_helix_beta_radius_ratio": 0.0,
+            "betlas_alpha_shell_radial_delta": 0.0,
+            "betlas_helix_beta_radius_ratio": 0.0,
         }
     beta_mid = np.array([item.midpoint for item in beta_geoms], dtype=float)
     helix_mid = np.array([item.midpoint for item in helix_geoms], dtype=float)
@@ -850,8 +807,8 @@ def _alpha_shell_features(
     beta_radius = float(np.mean(np.linalg.norm(beta_xy, axis=1)))
     helix_radius = float(np.mean(np.linalg.norm(helix_xy, axis=1)))
     return {
-        "cz_alpha_shell_radial_delta": helix_radius - beta_radius,
-        "cz_helix_beta_radius_ratio": helix_radius / (beta_radius + EPS),
+        "betlas_alpha_shell_radial_delta": helix_radius - beta_radius,
+        "betlas_helix_beta_radius_ratio": helix_radius / (beta_radius + EPS),
     }
 
 
@@ -902,31 +859,32 @@ def extract_signature(geometry: StructureGeometry) -> GeometrySignature:
     sheet_senses = [segment.sense_to_previous for segment in geometry.beta_segments if segment.sense_to_previous]
     sense_counts = Counter(sheet_senses)
 
+    parse_ok = bool(geometry.residues and geometry.beta_segments)
     features: dict[str, float | int | str] = {
-        "cz_parse_ok": 1 if geometry.residues and geometry.beta_segments else 0,
-        "cz_residue_count": float(residue_count),
-        "cz_beta_residue_count": float(len(beta_residue_indices)),
-        "cz_helix_residue_count": float(len(helix_residue_indices)),
-        "cz_beta_residue_fraction": len(beta_residue_indices) / max(1, residue_count),
-        "cz_helix_residue_fraction": len(helix_residue_indices) / max(1, residue_count),
-        "cz_beta_strand_count": float(len(geometry.beta_segments)),
-        "cz_helix_count": float(len(geometry.helices)),
-        "cz_pca_elongation": _nan_to_zero(pca_elongation),
-        "cz_pca_flatness": _nan_to_zero(pca_flatness),
-        "cz_axis_best_name": axis_name,
-        "cz_axis_best_score": float(axis_score),
-        "cz_axis_best_is_strand_axis": 1.0 if axis_name == "strand_axis" else 0.0,
-        "cz_axis_best_is_point_pc1": 1.0 if axis_name == "point_pc1" else 0.0,
-        "cz_axis_best_is_point_pc2": 1.0 if axis_name == "point_pc2" else 0.0,
-        "cz_axis_best_is_point_pc3": 1.0 if axis_name == "point_pc3" else 0.0,
-        "cz_z_continuity_fraction": best_axis_features["z_continuity_fraction"],
-        "cz_parallel_sheet_order_fraction": sense_counts.get("parallel", 0) / max(1, len(sheet_senses)),
-        "cz_antiparallel_sheet_order_fraction": sense_counts.get("anti-parallel", 0) / max(1, len(sheet_senses)),
+        "betlas_parse_ok": 1 if parse_ok else 0,
+        "betlas_residue_count": float(residue_count),
+        "betlas_beta_residue_count": float(len(beta_residue_indices)),
+        "betlas_helix_residue_count": float(len(helix_residue_indices)),
+        "betlas_beta_residue_fraction": len(beta_residue_indices) / max(1, residue_count),
+        "betlas_helix_residue_fraction": len(helix_residue_indices) / max(1, residue_count),
+        "betlas_beta_strand_count": float(len(geometry.beta_segments)),
+        "betlas_helix_count": float(len(geometry.helices)),
+        "betlas_pca_elongation": _nan_to_zero(pca_elongation),
+        "betlas_pca_flatness": _nan_to_zero(pca_flatness),
+        "betlas_axis_best_name": axis_name,
+        "betlas_axis_best_score": float(axis_score),
+        "betlas_axis_best_is_strand_axis": 1.0 if axis_name == "strand_axis" else 0.0,
+        "betlas_axis_best_is_point_pc1": 1.0 if axis_name == "point_pc1" else 0.0,
+        "betlas_axis_best_is_point_pc2": 1.0 if axis_name == "point_pc2" else 0.0,
+        "betlas_axis_best_is_point_pc3": 1.0 if axis_name == "point_pc3" else 0.0,
+        "betlas_z_continuity_fraction": best_axis_features["z_continuity_fraction"],
+        "betlas_parallel_sheet_order_fraction": sense_counts.get("parallel", 0) / max(1, len(sheet_senses)),
+        "betlas_antiparallel_sheet_order_fraction": sense_counts.get("anti-parallel", 0) / max(1, len(sheet_senses)),
     }
     for key, value in best_axis_features.items():
-        features[f"cz_axis_best_{key}"] = float(value)
-    features.update(_summary(strand_lengths, "cz_strand_length"))
-    features.update(_summary(helix_lengths, "cz_helix_length"))
+        features[f"betlas_axis_best_{key}"] = float(value)
+    features.update(_summary(strand_lengths, "betlas_strand_length"))
+    features.update(_summary(helix_lengths, "betlas_helix_length"))
     features.update(_sequence_features(geometry))
     features.update(_sheet_features(geometry, origin, direction))
     features.update(_beta_run_features(geometry, segment_midpoints, origin, direction))
@@ -943,19 +901,25 @@ def extract_signature(geometry: StructureGeometry) -> GeometrySignature:
     if len(segment_midpoints) >= 2:
         xy, _z, _ = project_to_axis(segment_midpoints, origin, direction)
         gaps = circular_gaps(np.arctan2(xy[:, 1], xy[:, 0]))
-        features["cz_angular_gap_cv"] = float(np.std(gaps) / (np.mean(gaps) + EPS))
+        features["betlas_angular_gap_cv"] = float(np.std(gaps) / (np.mean(gaps) + EPS))
     else:
-        features["cz_angular_gap_cv"] = 0.0
+        features["betlas_angular_gap_cv"] = 0.0
 
-    fold_scores = grammar_rule_scores(features)
-    top_fold = max(fold_scores, key=fold_scores.get) if fold_scores else ""
-    sorted_scores = sorted(fold_scores.values(), reverse=True)
-    margin = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) >= 2 else 0.0
-    features["cz_top_fold"] = top_fold
-    features["cz_rule_margin"] = float(margin)
-    features["cz_fold_scores_json"] = json.dumps(fold_scores, sort_keys=True)
-    for label in FOLD_LABELS:
-        features[f"cz_rule_score_{label}"] = float(fold_scores.get(label, 0.0))
+    informative_slice_count = _nan_to_zero(float(features.get("betlas_axis_best_slice_count", 0.0)))
+    score_eligible = bool(parse_ok and informative_slice_count > 0.0)
+    features["betlas_score_status"] = "ok" if score_eligible else "no_informative_slices"
+
+    fold_scores: dict[str, float] = {}
+    if score_eligible:
+        fold_scores = grammar_rule_scores(features, strict=True)
+        top_fold = max(fold_scores, key=fold_scores.get) if fold_scores else ""
+        sorted_scores = sorted(fold_scores.values(), reverse=True)
+        margin = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) >= 2 else 0.0
+        features["betlas_top_fold"] = top_fold
+        features["betlas_rule_margin"] = float(margin)
+        features["betlas_fold_scores_json"] = json.dumps(fold_scores, sort_keys=True)
+        for label in FOLD_LABELS:
+            features[f"betlas_rule_score_{label}"] = float(fold_scores.get(label, 0.0))
 
     return GeometrySignature(
         domain=geometry.domain,
@@ -970,19 +934,72 @@ def extract_feature_row(domain: DomainCandidate, mmcif_path: Path) -> dict[str, 
         geometry = build_structure_geometry(domain, mmcif_path)
         signature = extract_signature(geometry)
         row = signature.to_row()
-        row["cz_error"] = ""
+        row["betlas_error"] = ""
         return row
     except Exception as exc:
         row = domain.to_dict()
         row.update(
             {
-                "cz_parse_ok": 0,
-                "cz_error": f"{type(exc).__name__}: {exc}",
-                "cz_top_fold": "",
-                "cz_fold_scores_json": "{}",
+                "betlas_parse_ok": 0,
+                "betlas_error": f"{type(exc).__name__}: {exc}",
+                "betlas_top_fold": "",
+                "betlas_fold_scores_json": "{}",
             }
         )
         return row
+
+
+def extract_structure_features(
+    structure_path: str | Path,
+    *,
+    chain_id: str,
+    residue_ranges: str = "",
+    record_id: str | None = None,
+    domain_id: str | None = None,
+    pdb_id: str | None = None,
+) -> dict[str, Any]:
+    """Extract Betlas features for one user-provided mmCIF chain."""
+
+    path = Path(structure_path)
+    if not is_mmcif_path(path):
+        raise ValueError(
+            "Betlas single-structure feature extraction currently accepts mmCIF files "
+            "(.cif, .mmcif, .cif.gz, .mmcif.gz). Use readout commands for PDB inputs."
+        )
+    if not path.exists():
+        raise FileNotFoundError(f"structure file does not exist: {path}")
+    if not str(chain_id).strip():
+        raise ValueError("chain id is required for single-structure feature extraction")
+
+    stem = path.name.split(".", 1)[0].lower()
+    domain = DomainCandidate(
+        record_id=record_id or f"{stem}_{chain_id}",
+        pdb_id=(pdb_id or stem).lower(),
+        chain_id=str(chain_id),
+        domain_id=domain_id or f"{stem}_{chain_id}",
+        residue_ranges=residue_ranges,
+        fold_label_final="unlabeled",
+        evidence_level="user_input",
+        label_source_primary="user_input",
+    )
+    geometry = build_structure_geometry(domain, path)
+    if not geometry.residues:
+        chains = available_auth_chain_ids(path)
+        available = ", ".join(chains) if chains else "<none>"
+        raise ValueError(
+            f"no residues were selected for chain {chain_id!r}; available author chain ids: {available}"
+        )
+    if not geometry.beta_segments:
+        warnings = "; ".join(geometry.warnings) if geometry.warnings else "no beta-sheet segments"
+        raise ValueError(
+            "Betlas feature extraction requires parsed beta-sheet segments for single-structure "
+            f"mode; none were found for chain {chain_id!r}. Parser warnings: {warnings}. "
+            "Use --write-failed-row if you need a status-only CSV row."
+        )
+    signature = extract_signature(geometry)
+    row = signature.to_row()
+    row["betlas_error"] = ""
+    return row
 
 
 def assert_no_diagnostic_label_leakage(row: dict[str, Any]) -> None:
@@ -991,9 +1008,9 @@ def assert_no_diagnostic_label_leakage(row: dict[str, Any]) -> None:
         "fold_label_candidates",
         "evidence_level",
         "qc_status",
-        "allowed_for_publication_benchmark",
+        "allowed_for_benchmark",
     }
     for key in forbidden_targets:
         value = str(row.get(key, ""))
-        if value.startswith(DIAGNOSTIC_PREFIX):
+        if value.startswith(DIAGNOSTIC_PREFIX) or _is_compatibility_column(value):
             raise ValueError(f"label field {key} was populated from diagnostic field {value!r}")

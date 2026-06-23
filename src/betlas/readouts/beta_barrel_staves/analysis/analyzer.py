@@ -20,7 +20,7 @@ from .run_window_core import RunWindowCoreSelector, report_feature_table
 from .sequence_core import GlobalSequenceCoreSelector
 from .trajectory import TrajectoryMerger
 
-LEGACY_ANALYZER_OVERRIDE_PATHS = {
+COMPAT_ANALYZER_OVERRIDE_PATHS = {
     "min_points": ("count", "min_points_per_layer"),
     "min_points_per_layer": ("count", "min_points_per_layer"),
     "min_usable_layers": ("count", "min_usable_layers"),
@@ -116,9 +116,9 @@ class StrandCountAnalyzer:
     dedicated modules so each slice-only assumption can be audited separately.
     """
 
-    def __init__(self, config: AnalyzerConfig | None = None, **legacy_overrides):
+    def __init__(self, config: AnalyzerConfig | None = None, **compat_overrides):
         self.config = deepcopy(config or AnalyzerConfig())
-        self._apply_legacy_overrides(legacy_overrides)
+        self._apply_compat_overrides(compat_overrides)
         self.layer_analyzer = LayerAnalyzer(self.config)
         self.window_config = deepcopy(self.config)
         self.window_config.rules.sequence_core.enabled = False
@@ -134,13 +134,13 @@ class StrandCountAnalyzer:
         )
         self.confidence_estimator = ConfidenceEstimator(self.config.confidence)
 
-    def _apply_legacy_overrides(self, overrides: dict[str, object]) -> None:
+    def _apply_compat_overrides(self, overrides: dict[str, object]) -> None:
         for override_name, override_value in overrides.items():
-            if override_name not in LEGACY_ANALYZER_OVERRIDE_PATHS:
+            if override_name not in COMPAT_ANALYZER_OVERRIDE_PATHS:
                 raise TypeError(f"Unknown analyzer override: {override_name}")
 
             target = self.config
-            path = LEGACY_ANALYZER_OVERRIDE_PATHS[override_name]
+            path = COMPAT_ANALYZER_OVERRIDE_PATHS[override_name]
             for part in path[:-1]:
                 target = getattr(target, part)
             setattr(target, path[-1], override_value)

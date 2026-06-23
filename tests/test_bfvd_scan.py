@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from betlas.readouts.bfvd_scan.core import (
+from scripts.reproducibility.readouts.bfvd.core import (
     _build_audit_table,
     _metadata_qc_mask,
     _parse_ca_records,
@@ -72,7 +72,7 @@ def test_bfvd_audit_table_contract_uses_diagnostics_without_labels():
                 "avg_pLDDT": "84.0",
                 "pTM": "0.71",
                 "BFVD_version": "BASE",
-                "cz_beta_residue_fraction": 0.42,
+                "betlas_beta_residue_fraction": 0.42,
                 "parse_status": "eligible_domain_like_beta_rich",
                 "annotation_text": "hypothetical protein",
                 "bfvd_quality_flags": "",
@@ -84,15 +84,15 @@ def test_bfvd_audit_table_contract_uses_diagnostics_without_labels():
         [
             {
                 "record_id": "A0A",
-                "cz_rule_top1_label": "jelly_roll",
-                "cz_rule_top2_label": "beta_sandwich",
-                "cz_rule_probability_margin": 0.04,
-                "cz_rule_probability_entropy": 0.81,
-                "cz_sandwichness": 0.58,
-                "cz_jelly_rollness": 0.72,
-                "cz_barrel_likeness": 0.36,
-                "cz_mixed_topology_flag": 1,
-                "cz_topology_ambiguity_score": 0.66,
+                "betlas_rule_top1_label": "jelly_roll",
+                "betlas_rule_top2_label": "beta_sandwich",
+                "betlas_rule_probability_margin": 0.04,
+                "betlas_rule_probability_entropy": 0.81,
+                "betlas_sandwichness": 0.58,
+                "betlas_jelly_rollness": 0.72,
+                "betlas_barrel_likeness": 0.36,
+                "betlas_mixed_topology_flag": 1,
+                "betlas_topology_ambiguity_score": 0.66,
             }
         ]
     )

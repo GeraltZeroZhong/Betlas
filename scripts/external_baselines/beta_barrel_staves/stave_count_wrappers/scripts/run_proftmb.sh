@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: run_proftmb.sh [query_file] [output_prefix]
+
+Run the PROFtmb baseline wrapper using the unpacked Debian package files under
+tools/proftmb_deb/root.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG="$ROOT/tools/proftmb_deb/root"
 BIN="$PKG/usr/bin/proftmb"

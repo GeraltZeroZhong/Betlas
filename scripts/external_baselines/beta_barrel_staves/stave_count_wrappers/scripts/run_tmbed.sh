@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: run_tmbed.sh [input.fasta] [embeddings.h5|-] [output]
+
+Run the TMbed baseline wrapper. Pass '-' as the embedding argument to skip the
+embedding-cache option.
+Environment: TMBED_PYTHON, TMBED_THREADS.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOL="$ROOT/tools/TMbed"
 PYTHON_BIN="${TMBED_PYTHON:-$ROOT/.conda/tmbed/bin/python}"

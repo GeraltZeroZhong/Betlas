@@ -8,10 +8,6 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .bootstrap import configure_thread_environment
-
-configure_thread_environment()
-
 try:
     __version__ = version("betlas")
 except PackageNotFoundError:  # pragma: no cover - editable tree before metadata exists

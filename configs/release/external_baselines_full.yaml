@@ -1,0 +1,33 @@
+schema: betlas.external-baselines-config.latest
+reuse_existing: true
+
+dataset:
+  name: nr_s35_homology_representative
+  subset_csv: data/processed/release_evidence/nr_s35_homology_representative.csv
+  fold_assignments: runs/release_evidence_full/nonredundant_benchmarks/nr_s35_homology_representative/fold_assignments.csv
+
+outputs:
+  out_dir: runs/external_baselines_full
+  figure_dir: outputs/external_baseline_context_figures
+  deferred_figure_dir: outputs/model_reliability_ablation_deferred
+
+domain:
+  min_residues: 20
+
+esmc:
+  weights: data/external/esmc_weights/esmc_600m_2024_12_v0.pth
+  device: cuda
+  precision: fp16
+  knn_k: [1, 5, 10]
+
+foldseek:
+  binary: foldseek
+  threads: 8
+  sensitivity: 9.5
+  max_seqs: 300
+
+figures:
+  seed: 13
+  max_per_label: 80
+  network_k: 5
+  scatter_pairs: 50000

@@ -63,7 +63,7 @@ def git_state(repo_root: Path | None = None) -> dict[str, Any]:
             "root": "",
             "commit": "",
             "dirty": None,
-            "note": "No .git directory was found; use source_tree for archive-level source traceability.",
+            "note": "No .git directory was found; use source_tree for source-level traceability.",
         }
     return {
         "available": True,

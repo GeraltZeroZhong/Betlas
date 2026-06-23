@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: run_juchmme_pred_tmbb2.sh [hmm|hnn] [input.fasta] [output]
+
+Run the JUCHMME/PRED-TMBB2 baseline wrapper in HMM or HNN mode.
+Environment: JAVA_BIN.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JUCH="$ROOT/tools/juchmme_release/juchmme_git"
 JAVA_BIN="${JAVA_BIN:-java}"
@@ -33,7 +47,7 @@ case "$MODE" in
       > "$OUT" 2> "$OUT.err"
     ;;
   *)
-    echo "Usage: $0 [hmm|hnn] [input.fasta] [output]" >&2
+    usage >&2
     exit 2
     ;;
 esac
