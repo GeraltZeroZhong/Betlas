@@ -52,9 +52,10 @@ Check the release-tag documentation links before publishing the Python package.
 Check PyPI for a version conflict, then upload the two validated
 files. Authenticate with the project's authorised PyPI publishing credentials
 through Twine's supported local authentication or its interactive prompt.
+The named repository uses the existing PyPI credentials in `.pypirc`.
 
 ```bash
-python -m twine upload --repository-url https://upload.pypi.org/legacy/ \
+python -m twine upload --repository pypi \
   dist/1.1.0/betlas-1.1.0-py3-none-any.whl \
   dist/1.1.0/betlas-1.1.0.tar.gz
 ```
