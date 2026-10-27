@@ -4,7 +4,6 @@ import hashlib
 import zipfile
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from betlas import cli
@@ -17,12 +16,6 @@ from betlas.assets import (
     resolve_asset_path,
     resolve_esmc_weights,
     verify_asset,
-)
-from scripts.reproducibility.readouts.beta_barrel_detection.betlas_readout import (
-    ReadoutPaths,
-    build_or_load_betlas_151,
-    build_or_load_layer_radial16,
-    load_esmc_embeddings,
 )
 
 
@@ -444,30 +437,6 @@ def test_asset_manifest_validates_sha256_and_byte_size(tmp_path: Path, monkeypat
         list_assets()
 
 
-def test_esmc_npz_loader_uses_non_pickle_string_ids(tmp_path: Path) -> None:
-    npz = tmp_path / "esmc.npz"
-    import numpy as np
-
-    np.savez_compressed(
-        npz,
-        record_id=np.asarray(["r1", "r2"], dtype=str),
-        embeddings=np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=float),
-        esmc_available=np.asarray([1.0, 0.0], dtype=float),
-    )
-
-    embeddings, available = load_esmc_embeddings(npz, ["r2", "r1"])
-
-    assert embeddings.index.tolist() == ["r2", "r1"]
-    assert available.tolist() == [0.0, 1.0]
-
-    unsafe = tmp_path / "unsafe.npz"
-    np.savez_compressed(
-        unsafe,
-        record_id=np.asarray(["r1"], dtype=object),
-        embeddings=np.asarray([[1.0]], dtype=float),
-    )
-    with pytest.raises(ValueError, match="Object arrays cannot be loaded"):
-        load_esmc_embeddings(unsafe, ["r1"])
 
 
 def test_resolve_esmc_weights_only_checks_local_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -485,185 +454,38 @@ def test_resolve_esmc_weights_only_checks_local_paths(tmp_path: Path, monkeypatc
     assert resolve_esmc_weights() == weights
 
 
-def test_assets_cli_help_and_json_describe(capsys: pytest.CaptureFixture[str]) -> None:
+def test_assets_cli_help_and_json_describe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest_root = _write_manifest(
+        tmp_path, asset_id="unit-asset", filename="tiny.txt", data=b"synthetic fixture\n"
+    )
+    monkeypatch.setenv("BETLAS_ASSET_MANIFEST_DIR", str(manifest_root))
     with pytest.raises(SystemExit) as exc:
         cli.main(["assets", "--help"])
     assert exc.value.code == 0
     assert "download" in capsys.readouterr().out
 
-    cli.main(["assets", "describe", "betlas-beta-barrel-staves-official-v1", "--format", "json"])
+    cli.main(["assets", "describe", "unit-asset", "--format", "json"])
     out = capsys.readouterr().out
-    assert "betlas-beta-barrel-staves-official-v1" in out
-    assert "betlas_151_chain_features.csv" in out
+    assert "unit-asset" in out
+    assert "tiny.txt" in out
 
-    cli.main(["assets", "describe", "betlas-beta-barrel-staves-official-v1"])
+    cli.main(["assets", "describe", "unit-asset"])
     text = capsys.readouterr().out
     assert "Release status:" in text
     assert "purpose=" in text
 
 
-def test_official_assets_advertise_v1_release_bundles() -> None:
-    expected_bundles = {
-        "betlas-beta-barrel-detection-official-v1": "betlas-beta-barrel-detection-official-v1.zip",
-        "betlas-beta-barrel-staves-official-v1": "betlas-beta-barrel-staves-official-v1.zip",
-    }
-    for asset_id in (
-        "betlas-beta-barrel-detection-official-v1",
-        "betlas-beta-barrel-staves-official-v1",
-    ):
-        manifest = describe_asset(asset_id)
-        assert manifest["release_status"] == "released"
-        assert manifest["bundle"] == expected_bundles[asset_id]
 
 
-def test_staves_official_manifest_covers_runner_required_inputs() -> None:
-    manifest = describe_asset("betlas-beta-barrel-staves-official-v1")
-    filenames = {str(item["filename"]) for item in manifest["files"]}
-    assert {
-        "per_record_aligned_wide.csv",
-        "feature_columns_151.csv",
-        "betlas_151_chain_features.csv",
-        "layer_radial16_feature_values.csv",
-        "esmc_mean_embeddings_aligned.npz",
-        "esmc_embedding_coverage.csv",
-    } <= filenames
 
 
-def test_detection_official_manifest_covers_fixed_runner_inputs() -> None:
-    manifest = describe_asset("betlas-beta-barrel-detection-official-v1")
-    filenames = {str(item["filename"]) for item in manifest["files"]}
-    assert {
-        "benchmark_cohort.csv",
-        "feature_columns_151.csv",
-        "betlas_151_chain_features.csv",
-        "layer_radial16_feature_manifest.csv",
-        "layer_radial16_feature_values.csv",
-        "esmc_mean_embeddings_aligned.npz",
-        "official_fold_metrics.csv",
-        "official_per_record_predictions.csv",
-    } <= filenames
-    by_name = {str(item["filename"]): item for item in manifest["files"]}
-    assert (
-        by_name["betlas_151_chain_features.csv"]["download_path"]
-        == "beta_barrel_detection/official/betlas_151_chain_features.csv"
-    )
 
 
-def test_detection_fixed_runner_consumes_cached_feature_and_layer_inputs(tmp_path: Path) -> None:
-    cohort = pd.DataFrame(
-        [
-            {"record_id": "r1", "filename": "one.cif"},
-            {"record_id": "r2", "filename": "two.cif"},
-        ]
-    )
-    features_csv = tmp_path / "betlas_151_chain_features.csv"
-    layer_values_csv = tmp_path / "layer_radial16_feature_values.csv"
-    layer_manifest_csv = tmp_path / "layer_radial16_feature_manifest.csv"
-    pd.DataFrame(
-        [
-            {"record_id": "r2", "betlas_axis_best_angular_coverage": 0.2},
-            {"record_id": "r1", "betlas_axis_best_angular_coverage": 0.1},
-        ]
-    ).to_csv(features_csv, index=False)
-    pd.DataFrame(
-        [
-            {"record_id": "r2", "layer_radial16__decision_score": 0.8},
-            {"record_id": "r1", "layer_radial16__decision_score": 0.7},
-        ]
-    ).to_csv(layer_values_csv, index=False)
-    pd.DataFrame([{"feature": "layer_radial16__decision_score"}]).to_csv(layer_manifest_csv, index=False)
-    paths = ReadoutPaths(
-        out_dir=tmp_path / "out",
-        features_csv=features_csv,
-        layer_values_csv=layer_values_csv,
-        layer_manifest_csv=layer_manifest_csv,
-    )
-
-    features = build_or_load_betlas_151(
-        paths=paths,
-        cohort=cohort,
-        feature_columns=["betlas_axis_best_angular_coverage"],
-    )
-    layer_values, layer_manifest = build_or_load_layer_radial16(paths=paths, cohort=cohort)
-
-    assert features["record_id"].tolist() == ["r1", "r2"]
-    assert layer_values["record_id"].tolist() == ["r1", "r2"]
-    assert layer_manifest["feature"].tolist() == ["layer_radial16__decision_score"]
-    assert (paths.out_dir / "betlas_151_chain_features.csv").exists()
-    assert (paths.out_dir / "layer_radial16_feature_values.csv").exists()
 
 
-def test_detection_fixed_runner_aligns_generated_caches_before_reuse(tmp_path: Path) -> None:
-    cohort = pd.DataFrame(
-        [
-            {"record_id": "r1", "filename": "one.cif"},
-            {"record_id": "r2", "filename": "two.cif"},
-        ]
-    )
-    paths = ReadoutPaths(out_dir=tmp_path / "out")
-    paths.out_dir.mkdir(parents=True)
-    pd.DataFrame(
-        [
-            {"record_id": "r2", "betlas_axis_best_angular_coverage": 0.2},
-            {"record_id": "r1", "betlas_axis_best_angular_coverage": 0.1},
-        ]
-    ).to_csv(paths.out_dir / "betlas_151_chain_features.csv", index=False)
-    pd.DataFrame(
-        [
-            {"record_id": "r2", "layer_radial16__decision_score": 0.8},
-            {"record_id": "r1", "layer_radial16__decision_score": 0.7},
-        ]
-    ).to_csv(paths.out_dir / "layer_radial16_feature_values.csv", index=False)
-    pd.DataFrame([{"feature": "layer_radial16__decision_score"}]).to_csv(
-        paths.out_dir / "layer_radial16_feature_manifest.csv",
-        index=False,
-    )
-
-    features = build_or_load_betlas_151(
-        paths=paths,
-        cohort=cohort,
-        feature_columns=["betlas_axis_best_angular_coverage"],
-    )
-    layer_values, _manifest = build_or_load_layer_radial16(paths=paths, cohort=cohort)
-
-    assert features["record_id"].tolist() == ["r1", "r2"]
-    assert layer_values["record_id"].tolist() == ["r1", "r2"]
 
 
-def test_detection_fixed_runner_uses_explicit_chain_results_csv(tmp_path: Path) -> None:
-    chain_results = tmp_path / "custom_chain_results.csv"
-    pd.DataFrame(
-        [
-            {
-                "filename": "one.cif",
-                "chain": "A",
-                "result": "BARREL",
-                "decision_score": 9.5,
-                "score_raw": 1.0,
-                "score_adjust": 2.0,
-                "chain_residues": 100,
-                "sheet_residues": 80,
-            }
-        ]
-    ).to_csv(chain_results, index=False)
-    cohort = pd.DataFrame(
-        [
-            {
-                "record_id": "r1",
-                "filename": "one.cif",
-                "selected_chain_id": "A",
-            }
-        ]
-    )
-    paths = ReadoutPaths(
-        out_dir=tmp_path / "out",
-        chain_results_csv=chain_results,
-        betlas_beta_root=tmp_path / "missing_default_root",
-    )
-
-    values, manifest = build_or_load_layer_radial16(paths=paths, cohort=cohort)
-
-    assert values.loc[0, "record_id"] == "r1"
-    assert values.loc[0, "layer_radial16_source"] == "selected_chain"
-    assert values.loc[0, "layer_radial16__decision_score"] == 9.5
-    assert "layer_radial16__decision_score" in set(manifest["feature"])

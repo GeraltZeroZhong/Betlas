@@ -1,113 +1,54 @@
-# Foldseek Global-TMalign Structure-Search Baseline
+# Foldseek structure search
 
-This adapter treats [Foldseek](https://github.com/steineggerlab/foldseek) as
-an external Betlas beta-barrel detection evaluation baseline. Betlas beta-barrel detection labels this variant
-`foldseek_tmalign_structure_search` because it searches query chains against a
-reference set of known beta-barrel chains using Foldseek's global TMalign mode.
-
-Foldseek is GPL-3.0, while Betlas beta-barrel detection is MIT-licensed, so the upstream binary
-and any Foldseek databases are not vendored here. This directory only contains
-chain-file generation, invocation, and result normalization.
-
-## Upstream Sources
-
-- Foldseek repository: <https://github.com/steineggerlab/foldseek>
-- Foldseek paper: van Kempen M. et al. Nature Biotechnology. 2024.
-
-## Decision Rule
-
-The main baseline uses `--alignment-type 1`, Foldseek's global TMalign mode.
-This is intentionally different from Foldseek's default local 3Di+AA alignment:
-the Betlas beta-barrel detection task asks whether a whole chain has a beta-barrel-like fold, not
-whether it contains a locally similar motif.
-
-The normalized decision defaults are:
-
-- `score`: `min(qtmscore, ttmscore)` for the best eligible hit
-- `result`: `BARREL` when `score >= 0.50`, query coverage is at least `0.60`,
-  and target coverage is at least `0.60`; otherwise `NON_BARREL`
-- `decision_rule`: recorded in each row so thresholds can be recalibrated
-
-The normalized CSV keeps the best target id, coverage, `qtmscore`, `ttmscore`,
-`alntmscore`, Foldseek score fields, and hit counts.
-
-## Reference Database
-
-For repeated evaluation, build a custom reference database once from curated
-canonical beta-barrel chain structures:
+This adapter calls [Foldseek](https://github.com/steineggerlab/foldseek), prepares
+chain-level structure queries, and summarizes structure-search hits. Install
+Foldseek separately under its upstream license and supply the reference
+structures. This directory contains the Betlas integration code.
 
 ```bash
-foldseek createdb path/to/reference_barrel_chains ref_barrel_db
-foldseek createindex ref_barrel_db tmp_index
+python -m scripts.external_baselines.beta_barrel_detection.foldseek.structure_search \
+  input_structures --reference-structures reference_structures \
+  --foldseek /path/to/foldseek --out-dir output/foldseek \
+  --out output/foldseek/predictions.csv
 ```
 
-The reference manifest should exclude evaluation-set chains to avoid leakage.
-At minimum, record PDB id, chain id, source dataset, curation notes, and the
-Foldseek version used to build the database.
-
-## Structure-to-Search Workflow
-
-When starting from PDB/CIF/mmCIF query structures, generate one single-chain PDB
-record per analyzable chain and run the baseline:
+Use `runner` for pre-existing queries and a target database:
 
 ```bash
-PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py \
-  path/to/query_structures \
-  --out-dir runs/external_baselines/foldseek_tmalign_structure_search \
-  --target-db /path/to/ref_barrel_db \
-  --out runs/external_baselines/foldseek_tmalign_structure_search.csv
+python -m scripts.external_baselines.beta_barrel_detection.foldseek.runner \
+  query_structures target_database --foldseek /path/to/foldseek \
+  --out output/foldseek.csv -- --threads 2
 ```
 
-You can also point the adapter at reference structures directly and let it run
-`foldseek createdb` in the working directory:
+`--foldseek` selects the executable; `FOLDSEEK_BIN` or the `foldseek` command on
+`PATH` can also supply it. Options after `--` are passed as individual arguments
+to Foldseek. `--work-dir` retains raw hits and intermediate files for `runner`.
+The `structures` module prepares chains as an independent step.
+
+The default alignment type is 1 (TMalign). The adapter's configurable decision
+rule requires query and target coverage of at least 0.6 and
+`min(qtmscore, ttmscore) >= 0.5`. These defaults define the adapter's hit policy;
+a calibrated beta-barrel classifier requires separate validation. Set
+`--score-mode`, `--score-threshold`,
+`--min-query-coverage`, and `--min-target-coverage` for the intended application.
+A reference collection containing the relevant structures is required.
+
+The hit table uses Foldseek's headerless format:
+`query,target,qlen,tlen,alnlen,qcov,tcov,qtmscore,ttmscore,alntmscore,evalue,bits`.
+Normalized CSV rows contain `sample_id`, `result`, `score`, the decision rule,
+coverage thresholds, hit counts, the best target, and its alignment scores.
+Expected query IDs supplied to the API or `--query-id-list` retain no-hit queries
+as `NON_BARREL`. Structure workflows supply those IDs automatically.
 
 ```bash
-PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py \
-  path/to/query_structures \
-  --out-dir runs/external_baselines/foldseek_tmalign_structure_search \
-  --reference-structures path/to/reference_barrel_chains \
-  --create-index \
-  --out runs/external_baselines/foldseek_tmalign_structure_search.csv
+python -m scripts.external_baselines.beta_barrel_detection.foldseek.evaluate_dataset \
+  --positive-dir positive_structures --negative-dir negative_structures \
+  --reference-dir reference_structures --foldseek /path/to/foldseek \
+  --out-dir output/foldseek-evaluation --tag example
 ```
 
-The generator writes:
-
-- `query_chains/chains/<sample_id>.pdb`: one exported chain per sample
-- `query_chains/chain_manifest.csv`: source file and chain metadata
-- `query_chains/residue_mapping.csv`: chain-file residue index to source residue
-- `foldseek_work/foldseek_hits.tsv`: raw Foldseek TSV before normalization
-
-For smoke tests, create a tiny local Foldseek-compatible executable under
-`runs/external_baselines/foldseek_smoke/` and pass its path with `--foldseek`.
-Generated smoke files should stay under `runs/`.
-
-## Betlas beta-barrel detection Dataset Evaluation
-
-The dataset evaluator mirrors the existing external baseline table layout and
-writes both raw-label and manual-reviewed outputs. Manual relabeling is applied
-only when `--manual-manifest` is explicitly provided:
-
-```bash
-PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/evaluate_dataset.py \
-  --positive-dir data/positive \
-  --negative-dir data/negative \
-  --out-dir runs/external_baselines/foldseek_tmalign_structure_search_YYYYMMDD_HHMMSS \
-  --manual-manifest path/to/manual_review_manifest.csv \
-  --foldseek tools/foldseek/bin/foldseek \
-  --tag YYYYMMDD_HHMMSS
-```
-
-By default, `data/positive` is used as the reference barrel structure set. The
-evaluator excludes all reference target chains from the same PDB id as each
-query before choosing the best hit, so positive examples cannot be classified
-only by matching themselves. It writes:
-
-- `eval_chain_results_<tag>_raw.csv`
-- `eval_file_results_<tag>_raw.csv`
-- `eval_chain_results_<tag>_manual_reviewed.csv`
-- `eval_file_results_<tag>_manual_reviewed.csv`
-- `foldseek_tmalign_structure_search_summary_<tag>.csv`
-- `foldseek_tmalign_structure_search_summary_<tag>.md`
-
-The full global-TMalign run is compute-heavy. Store generated search databases,
-raw Foldseek TSV files and evaluator outputs outside the tracked source tree.
+Dataset evaluation excludes reference hits whose filename prefix before the first
+underscore matches that of the query, case-insensitively. This supports structure
+collections named by source accession; use distinct prefixes for unrelated inputs.
+`--reference-dir` defaults to the explicitly supplied positive directory. Reported
+metrics therefore depend on that reference choice and exclusion policy.

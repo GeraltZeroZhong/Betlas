@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -220,12 +221,12 @@ def test_slice_feature_row_matches_existing_extraction_columns() -> None:
         assert row[key] == features[key]
 
 
-def test_extract_signature_zero_informative_slices_is_not_rule_scored() -> None:
+def test_extract_signature_sparse_axis_is_unavailable() -> None:
     features = extract_signature(_single_strand_geometry()).features
 
     assert features["betlas_parse_ok"] == 1
-    assert features["betlas_axis_best_slice_count"] == 0.0
-    assert features["betlas_score_status"] == "no_informative_slices"
+    assert np.isnan(features["betlas_axis_best_slice_count"])
+    assert features["axis_applicability"] == "too_few_beta_nodes"
     assert "betlas_top_fold" not in features
     assert not any(column.startswith("betlas_rule_score_") for column in features)
 
@@ -243,7 +244,7 @@ def test_extract_signature_parse_failed_status_when_beta_segments_missing() -> N
     features = extract_signature(geometry).features
 
     assert features["betlas_parse_ok"] == 0
-    assert features["betlas_score_status"] == "parse_failed"
+    assert features["moment_status"] == "no_beta_segments"
     assert "betlas_top_fold" not in features
     assert not any(column.startswith("betlas_rule_score_") for column in features)
 
@@ -259,10 +260,9 @@ def test_slice_cli_help_is_public(capsys: pytest.CaptureFixture[str]) -> None:
     assert "--summary-out" in out
 
 
-def test_extract_features_single_structure_cli_feeds_grammar_score(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_extract_features_single_structure_cli_uses_current_contract(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     structure = tmp_path / "mini.cif"
     features = tmp_path / "features.csv"
-    scores = tmp_path / "scores.csv"
     _write_minimal_mmcif(structure)
 
     cli.main(
@@ -287,10 +287,10 @@ def test_extract_features_single_structure_cli_feeds_grammar_score(tmp_path: Pat
     assert manifest["parameters"]["model_id"] == 0
     assert "Wrote 1 feature row" in capsys.readouterr().out
 
-    cli.main(["grammar", "score", "--features", str(features), "--out", str(scores)])
-    scored = pd.read_csv(scores)
-    assert "betlas_top_fold" in scored
-    assert "betlas_rule_score_beta_barrel" in scored
+    from betlas.features.current import FEATURE_COLUMNS, FEATURE_SCHEMA
+    assert all(column in row.index for column in FEATURE_COLUMNS)
+    assert row["feature_schema"] == FEATURE_SCHEMA
+    assert not any("fft" in column or "rule_score" in column for column in row.index)
 
     points = tmp_path / "points.csv"
     cli.main(["slice", str(structure), "--chain", "A", "--model-id", "0", "--points-out", str(points)])
@@ -373,7 +373,7 @@ def test_extract_features_without_args_points_to_single_structure_or_build_datas
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "betlas extract-features --structure STRUCTURE.cif" in err
-    assert "betlas build-dataset --out data/processed/betlas_full_labels.csv" in err
+    assert "betlas build-dataset --out outputs/labels.csv" in err
 
 
 def test_chains_cli_inspects_author_and_label_chains(
@@ -456,95 +456,10 @@ def test_slice_cli_zero_informative_slices_writes_status_and_headers(
     assert set(point_frame["exclusion_reason"]) == {"no_informative_slices"}
 
 
-def test_grammar_score_strict_rejects_incomplete_feature_table(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    features = tmp_path / "incomplete.csv"
-    permissive = tmp_path / "permissive.csv"
-    pd.DataFrame(
-        [{"record_id": "r1", "betlas_axis_best_slice_coverage_median": 0.5}]
-    ).to_csv(features, index=False)
-
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["grammar", "score", "--features", str(features)])
-    assert exc.value.code == 2
-    err = capsys.readouterr().err
-    assert "requires betlas_parse_ok" in err
-    assert "betlas extract-features --structure STRUCTURE.cif" in err
-
-    cli.main(["grammar", "score", "--features", str(features), "--no-strict", "--out", str(permissive)])
-    assert "betlas_top_fold" in pd.read_csv(permissive).columns
 
 
-def test_grammar_score_rejects_parse_failed_rows_by_default(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    features = tmp_path / "parse_failed.csv"
-    permissive = tmp_path / "parse_failed_scored.csv"
-    pd.DataFrame(
-        [
-            {
-                "record_id": "r1",
-                "chain_id": "A",
-                "betlas_parse_ok": 0,
-                "betlas_error": "no beta-sheet segments. Use --write-failed-row if you need a status-only CSV row.",
-                "betlas_axis_best_slice_coverage_median": 0.5,
-            }
-        ]
-    ).to_csv(features, index=False)
-
-    with pytest.raises(SystemExit) as exc:
-        cli.main(["grammar", "score", "--features", str(features), "--no-strict"])
-    assert exc.value.code == 2
-    captured = capsys.readouterr()
-    assert "refused parse-failed feature rows" in captured.err
-    assert "--write-failed-row" not in captured.err
-    assert "--allow-parse-fail" in captured.err
-    assert "Traceback" not in captured.err
-
-    cli.main(
-        [
-            "grammar",
-            "score",
-            "--features",
-            str(features),
-            "--no-strict",
-            "--allow-parse-fail",
-            "--out",
-            str(permissive),
-        ]
-    )
-    scored = pd.read_csv(permissive)
-    assert scored.loc[0, "betlas_parse_ok"] == 0
-    assert scored.loc[0, "betlas_score_status"] == "parse_failed"
-    assert "betlas_top_fold" not in scored.columns
-    assert not any(column.startswith("betlas_rule_score_") for column in scored.columns)
 
 
-def test_grammar_score_keeps_no_informative_rows_status_only_in_compat_mode(tmp_path: Path) -> None:
-    features = tmp_path / "no_informative.csv"
-    out = tmp_path / "scored.csv"
-    pd.DataFrame(
-        [
-            {
-                "record_id": "r1",
-                "chain_id": "A",
-                "betlas_parse_ok": 1,
-                "betlas_score_status": "no_informative_slices",
-                "betlas_axis_best_slice_count": 0,
-                "betlas_axis_best_slice_coverage_median": 0.0,
-            }
-        ]
-    ).to_csv(features, index=False)
-
-    cli.main(["grammar", "score", "--features", str(features), "--no-strict", "--out", str(out)])
-
-    scored = pd.read_csv(out)
-    assert scored.loc[0, "betlas_score_status"] == "no_informative_slices"
-    assert "betlas_top_fold" not in scored.columns
-    assert not any(column.startswith("betlas_rule_score_") for column in scored.columns)
 
 
 def test_slice_structure_fails_when_no_beta_segments() -> None:

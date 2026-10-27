@@ -10,18 +10,16 @@ import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Iterable
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-DEFAULT_ASSET_BASE_URL = "https://github.com/GeraltZeroZhong/Betlas/releases/download/v1.0.0/"
+DEFAULT_ASSET_BASE_URL = ""
 ASSET_BASE_URL_ENV = "BETLAS_ASSET_BASE_URL"
 ASSET_DIR_ENV = "BETLAS_ASSET_DIR"
 ESMC_WEIGHTS_ENV = "BETLAS_ESMC_WEIGHTS"
 _ASSET_MANIFEST_DIR_ENV = "BETLAS_ASSET_MANIFEST_DIR"
-_PACKAGE_MANIFEST_ROOT = "asset_manifests"
 _URL_TIMEOUT_SECONDS = 30
 _PENDING_RELEASE_STATUS = "pending_release"
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -56,26 +54,12 @@ def _cache_dir() -> Path:
     return Path(os.environ.get(ASSET_DIR_ENV, "~/.cache/betlas/assets")).expanduser()
 
 
-def _iter_package_manifest_paths() -> Iterable[Any]:
-    root = resources.files("betlas").joinpath(_PACKAGE_MANIFEST_ROOT)
+def _iter_manifest_paths() -> Iterable[Path]:
+    """Read manifests only from the directory selected by the caller."""
 
-    def walk(node: Any) -> Iterable[Any]:
-        if node.is_file() and node.name == "manifest.yaml":
-            yield node
-            return
-        if node.is_dir():
-            for child in sorted(node.iterdir(), key=lambda item: item.name):
-                yield from walk(child)
-
-    yield from walk(root)
-
-
-def _iter_manifest_paths() -> Iterable[Any]:
     override = os.environ.get(_ASSET_MANIFEST_DIR_ENV)
     if override:
         yield from sorted(Path(override).expanduser().rglob("manifest.yaml"))
-        return
-    yield from _iter_package_manifest_paths()
 
 
 def _read_yaml(path: Any) -> dict[str, Any]:
@@ -265,7 +249,10 @@ def _asset_file_path(root: Path, file_info: dict[str, Any]) -> Path:
 
 
 def _base_url(value: str | None = None) -> str:
-    return str(value or os.environ.get(ASSET_BASE_URL_ENV, DEFAULT_ASSET_BASE_URL))
+    base = str(value or os.environ.get(ASSET_BASE_URL_ENV, DEFAULT_ASSET_BASE_URL)).strip()
+    if not base:
+        raise AssetError(f"Set {ASSET_BASE_URL_ENV} or pass --base-url to select an asset source")
+    return base
 
 
 def _download_source(file_info: dict[str, Any], base_url: str | None = None) -> str:
@@ -299,8 +286,8 @@ def _require_released_or_explicit_mirror(manifest: dict[str, Any], base_url: str
     if status == _PENDING_RELEASE_STATUS and not _using_explicit_base_url(base_url):
         asset_id = str(manifest.get("asset_id", "<unknown>"))
         raise AssetError(
-            f"asset {asset_id} is marked pending_release; the default Betlas release payload is not "
-            f"available yet. Set {ASSET_BASE_URL_ENV} or pass --base-url to a local mirror that follows "
+            f"asset {asset_id} is marked pending_release. Set {ASSET_BASE_URL_ENV} or pass "
+            "--base-url to an available source that follows "
             "the manifest download_path layout."
         )
 

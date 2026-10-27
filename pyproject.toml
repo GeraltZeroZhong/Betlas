@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "betlas"
-version = "1.0.0"
-description = "Geometry-topology grammar and benchmarks for beta-structure fold classes."
+version = "1.1.0"
+description = "Interpretable beta-structure descriptors and learned structural applications."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -38,6 +38,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+geometry = [
+  "gemmi>=0.7.4",
+  "networkx>=3.4",
+  "matplotlib>=3.7",
+]
 ml = [
   "xgboost>=2.0",
 ]
@@ -52,8 +57,10 @@ betlas = "betlas.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/GeraltZeroZhong/Betlas"
+Documentation = "https://github.com/GeraltZeroZhong/Betlas/blob/v1.1.0/README.md"
 Repository = "https://github.com/GeraltZeroZhong/Betlas"
 Issues = "https://github.com/GeraltZeroZhong/Betlas/issues"
+Changelog = "https://github.com/GeraltZeroZhong/Betlas/blob/v1.1.0/CHANGELOG.md"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -63,11 +70,10 @@ where = ["src"]
 include = ["betlas*"]
 
 [tool.setuptools.package-data]
-"betlas" = ["asset_manifests/**/*.yaml"]
 "betlas.example_data" = ["*.cif"]
+"betlas.prediction" = ["*.json"]
 "betlas.readouts.beta_barrel_detection" = ["conf/**/*.yaml"]
 "betlas.readouts.beta_barrel_staves" = ["conf/**/*.yaml"]
-"betlas.readouts.topology_diagnostics" = ["conf/**/*.yaml"]
 "betlas.ml" = ["conf/**/*.yaml"]
 
 [tool.ruff]

@@ -124,7 +124,18 @@ def _git_untracked_file_state(repo_root: Path) -> list[dict[str, str | None]]:
 
 
 def _git_state() -> dict[str, object]:
-    repo_root = Path(__file__).resolve().parents[2]
+    # Only an adjacent source checkout owns this package's Git metadata.
+    # Git discovery from an exported or installed copy could select an
+    # unrelated ancestor repository.
+    repo_root = Path(__file__).resolve().parents[4]
+    if not (repo_root / ".git").exists():
+        return {
+            "commit": None,
+            "dirty": False,
+            "status_porcelain": None,
+            "untracked_files": [],
+            "diff_sha256": None,
+        }
     commit = _git_output(["rev-parse", "HEAD"], repo_root)
     status = _git_output(["status", "--porcelain"], repo_root)
     diff = _git_output(["diff", "--binary", "HEAD"], repo_root)

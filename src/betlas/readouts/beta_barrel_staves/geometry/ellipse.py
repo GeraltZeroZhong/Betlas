@@ -63,10 +63,8 @@ def _closest_parameter(point_x: float, point_y: float, axis_a: float, axis_b: fl
     """
     Return the ellipse parameter of the closest point to ``(point_x, point_y)``.
 
-    We use several Newton starts around the scaled polar angle and keep the best
-    converged solution. This is fast for the small slice sizes in this project
-    while remaining much closer to the physical orthogonal distance than an
-    algebraic residual.
+    Evaluate several Newton starts around the scaled polar angle and retain
+    the parameter with the smallest squared point-to-ellipse distance.
     """
     if (abs(point_x) < _EPS) and (abs(point_y) < _EPS):
         return 0.5 * pi
@@ -136,9 +134,9 @@ def _trim_points_for_direct_fit(points_xy: np.ndarray) -> np.ndarray:
     """
     Keep a robust core before the direct fit.
 
-    `fitEllipseDirect()` is much faster than iterative geometric fitting, but it
-    is also more sensitive to obvious outliers. We therefore keep the lightweight
-    radial trimming that previously fed the nonlinear initializer.
+    Trim radial outliers using the median absolute deviation about the median
+    center. Retain all points when trimming would leave fewer than the five
+    points required by the direct ellipse fit.
     """
     pts = np.asarray(points_xy, dtype=float)
     median_center = np.median(pts, axis=0)
@@ -196,10 +194,10 @@ def fit_rotated_ellipse(
     """
     Fit a rotated ellipse using `cv2.fitEllipseDirect()`.
 
-    OpenCV's direct least-squares fit is non-iterative and much faster than the
-    previous nonlinear geometric solver. We still compute the downstream
-    geometric diagnostics once on the final ellipse so the rest of the analyzer
-    can keep using RMSE/inlier-based thresholds unchanged.
+    Fit the radially trimmed points, then compute signed geometric distances
+    for all input points. Return canonical ellipse parameters, distance errors,
+    and inlier diagnostics. Return ``None`` for fewer than five points or a
+    failed fit.
     """
     pts = np.asarray(points_xy, dtype=float)
     if pts.ndim != 2 or pts.shape[1] != 2:

@@ -1,1 +1,1 @@
-"""Repository companion wrappers for external baseline tools used by Betlas analyses."""
+"""Adapters for independently installed external methods."""

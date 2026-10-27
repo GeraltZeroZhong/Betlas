@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from scripts.external_baselines.beta_barrel_detection.pred_tmbb2.runner import (
     DEFAULT_MIN_TM_STRANDS,
@@ -395,7 +395,7 @@ def _metrics(rows: Sequence[dict[str, object]], *, file_level: bool) -> dict[str
     precision = tp / (tp + fp) if tp + fp else math.nan
     specificity = tn / (tn + fp) if tn + fp else math.nan
     accuracy = (tp + tn) / (tp + fp + tn + fn) if tp + fp + tn + fn else math.nan
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else math.nan
+    f1 = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else math.nan
     balanced_accuracy = (
         (recall + specificity) / 2
         if not math.isnan(recall) and not math.isnan(specificity)
@@ -545,10 +545,10 @@ def run_dataset(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate PRED-TMBB2 single-sequence JUCHMME on Betlas beta-barrel detection data."
+        description="Evaluate PRED-TMBB2 single-sequence JUCHMME on supplied positive/negative structure directories."
     )
-    parser.add_argument("--positive-dir", default="data/positive")
-    parser.add_argument("--negative-dir", default="data/negative")
+    parser.add_argument("--positive-dir", required=True)
+    parser.add_argument("--negative-dir", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--juchmme-dir", required=True)
     parser.add_argument(

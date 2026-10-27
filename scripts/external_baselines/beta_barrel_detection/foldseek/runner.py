@@ -12,6 +12,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+
 from Bio.PDB.Polypeptide import is_aa
 
 from scripts.external_baselines.beta_barrel_detection.foldseek.structures import (

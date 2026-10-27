@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from scripts.external_baselines.beta_barrel_detection.foldseek.runner import (
     BASELINE_NAME,
@@ -470,7 +470,7 @@ def _metrics(rows: Sequence[dict[str, object]], *, file_level: bool) -> dict[str
     precision = tp / (tp + fp) if tp + fp else math.nan
     specificity = tn / (tn + fp) if tn + fp else math.nan
     accuracy = (tp + tn) / (tp + fp + tn + fn) if tp + fp + tn + fn else math.nan
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else math.nan
+    f1 = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else math.nan
     balanced_accuracy = (
         (recall + specificity) / 2
         if not math.isnan(recall) and not math.isnan(specificity)
@@ -527,9 +527,6 @@ def _write_summary_md(path: Path, summary_rows: Sequence[dict[str, object]]) -> 
 
 
 def _default_foldseek_executable() -> str:
-    local_binary = Path("tools/foldseek/bin/foldseek")
-    if local_binary.exists():
-        return str(local_binary.resolve())
     return os.environ.get("FOLDSEEK_BIN", "foldseek")
 
 
@@ -673,10 +670,10 @@ def run_dataset(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate Foldseek global-TMalign structure search on Betlas beta-barrel detection data."
+        description="Evaluate Foldseek global-TMalign structure search on supplied positive/negative structure directories."
     )
-    parser.add_argument("--positive-dir", default="data/positive")
-    parser.add_argument("--negative-dir", default="data/negative")
+    parser.add_argument("--positive-dir", required=True)
+    parser.add_argument("--negative-dir", required=True)
     parser.add_argument(
         "--reference-dir",
         help="Reference barrel structures. Defaults to --positive-dir.",
@@ -685,7 +682,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--foldseek",
         default=_default_foldseek_executable(),
-        help="Foldseek executable. Defaults to tools/foldseek/bin/foldseek, FOLDSEEK_BIN, or foldseek.",
+        help="Foldseek executable. Defaults to FOLDSEEK_BIN or foldseek on PATH.",
     )
     parser.add_argument(
         "--manual-manifest",

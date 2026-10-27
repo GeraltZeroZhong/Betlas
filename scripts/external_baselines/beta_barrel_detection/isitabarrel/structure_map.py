@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from scripts.external_baselines.beta_barrel_detection.isitabarrel.contact_maps import (
     DEFAULT_CA_CUTOFF,

@@ -81,11 +81,11 @@ def _rows_by_chain(rows: Iterable[object]) -> dict[str, object]:
 
 def run_external_barrel_gate(file_path: str, cfg: AppConfig) -> dict[str, BarrelGateDecision]:
     """
-    Run an optional external barrel/non-barrel prefilter.
+    Return no decisions when the external gate is disabled.
 
-    Betlas is self-contained and does not bundle another Betlas project as a
-    dependency. The hook is kept so cached payloads and future external adapters
-    have a stable place in the readout contract.
+    Enabling this setting raises ``RuntimeError`` because an external gate
+    adapter is required. The readout API accepts detection decisions through
+    its ``barrel_decisions`` argument.
     """
     if not cfg.barrel_gate.enabled:
         return {}

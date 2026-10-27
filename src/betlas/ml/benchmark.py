@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from omegaconf import OmegaConf
-from sklearn.base import BaseEstimator, ClassifierMixin, clone
+from sklearn.base import clone
 from sklearn.ensemble import (
     ExtraTreesClassifier,
     HistGradientBoostingClassifier,
@@ -28,13 +28,13 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from ..constants import FOLD_LABELS
+from ..features.current import FEATURE_COLUMNS
 from ..provenance import build_run_manifest, write_json
 from ..schema import normalize_feature_columns
 from .splits import fold_label_counts, make_grouped_splits
 
 BENCHMARK_REQUIRED_COLUMNS = ("record_id", "pdb_id", "domain_id", "fold_label_final")
 BENCHMARK_GROUP_COLUMNS = ("cath_s35_cluster_id", "cath_homology_code", "pdb_id")
-RULE_SCORE_COLUMNS = tuple(f"betlas_rule_score_{label}" for label in FOLD_LABELS)
 
 ID_COLUMNS = {
     "record_id",
@@ -105,7 +105,7 @@ AGGREGATE_FEATURES = {
     "betlas_rule_margin",
     "betlas_parse_ok",
 }
-FEATURE_SETS = ("raw_geometry", "raw_plus_rule_scores", "rules_only")
+FEATURE_SETS = ("raw_geometry",)
 
 
 CONFIG_RESOURCE = "conf/default.yaml"
@@ -123,13 +123,15 @@ def load_benchmark_config(
     return dict(OmegaConf.to_container(base, resolve=True))
 
 
-def _cfg_get(config: Mapping[str, Any], dotted_key: str, default: Any) -> Any:
+def _cfg_get(
+    config: Mapping[str, Any], dotted_key: str, default: Any, *, allow_none: bool = False
+) -> Any:
     current: Any = config
     for key in dotted_key.split("."):
         if not isinstance(current, Mapping) or key not in current:
             return default
         current = current[key]
-    return default if current is None else current
+    return default if current is None and not allow_none else current
 
 
 def _cfg_int(config: Mapping[str, Any], dotted_key: str, default: int) -> int:
@@ -151,35 +153,6 @@ def is_readout_feature_column(column: str) -> bool:
     )
 
 
-class RuleScoreClassifier(BaseEstimator, ClassifierMixin):
-    def __init__(self, labels: tuple[str, ...] = FOLD_LABELS):
-        self.labels = tuple(labels)
-
-    def fit(self, X: pd.DataFrame, y: np.ndarray) -> RuleScoreClassifier:
-        self.classes_ = np.unique(y)
-        return self
-
-    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        score_cols = [f"betlas_rule_score_{label}" for label in self.labels]
-        missing = [column for column in score_cols if column not in X]
-        if missing:
-            raise ValueError(
-                "grammar_rules benchmark requires precomputed Betlas rule-score columns; "
-                f"missing columns: {', '.join(missing)}"
-            )
-        raw = np.column_stack(
-            [
-                pd.to_numeric(X[col], errors="coerce").fillna(0.0).to_numpy()
-                for col in score_cols
-            ]
-        )
-        raw = raw - raw.max(axis=1, keepdims=True)
-        exp = np.exp(raw)
-        probs = exp / np.maximum(exp.sum(axis=1, keepdims=True), 1e-12)
-        return probs
-
-    def predict(self, X: pd.DataFrame) -> np.ndarray:
-        return np.argmax(self.predict_proba(X), axis=1)
 
 
 @dataclass(frozen=True)
@@ -192,47 +165,18 @@ class BenchmarkResult:
 
 
 def numeric_feature_columns(df: pd.DataFrame) -> list[str]:
-    columns: list[str] = []
-    for col in df.columns:
-        if col in ID_COLUMNS:
-            continue
-        if is_readout_feature_column(col):
-            continue
-        if col in DEPRECATED_SCIENTIFIC_FEATURE_COLUMNS:
-            continue
-        if not col.startswith("betlas_"):
-            continue
-        numeric = pd.to_numeric(df[col], errors="coerce")
-        if numeric.notna().sum() == 0:
-            continue
-        columns.append(col)
-    return columns
+    """Select present current descriptors, retaining entirely missing columns."""
+    return [column for column in FEATURE_COLUMNS if column in df.columns]
 
 
 def raw_geometry_feature_columns(df: pd.DataFrame) -> list[str]:
-    columns: list[str] = []
-    for column in numeric_feature_columns(df):
-        if column in AGGREGATE_FEATURES:
-            continue
-        if any(column.startswith(prefix) for prefix in AGGREGATE_FEATURE_PREFIXES):
-            continue
-        columns.append(column)
-    return columns
+    return numeric_feature_columns(df)
 
 
 def feature_columns_for_set(df: pd.DataFrame, feature_set: str) -> list[str]:
-    if feature_set == "raw_geometry":
-        return raw_geometry_feature_columns(df)
-    if feature_set == "raw_plus_rule_scores":
-        return [
-            column
-            for column in numeric_feature_columns(df)
-            if column != "betlas_parse_ok" and column != "betlas_rule_margin"
-        ]
-    if feature_set == "rules_only":
-        return [column for column in RULE_SCORE_COLUMNS if column in df.columns]
-    available = ", ".join(FEATURE_SETS)
-    raise ValueError(f"unknown benchmark feature set {feature_set!r}; expected one of: {available}")
+    if feature_set != "raw_geometry":
+        raise ValueError(f"Unknown descriptor set {feature_set!r}; expected raw_geometry")
+    return raw_geometry_feature_columns(df)
 
 
 def _connected_group_series(df: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
@@ -335,24 +279,6 @@ def _group_source_counts(df: pd.DataFrame) -> dict[str, int]:
     return counts
 
 
-def _validate_rule_score_values(df: pd.DataFrame) -> None:
-    missing = [column for column in RULE_SCORE_COLUMNS if column not in df.columns]
-    if missing:
-        raise ValueError(
-            "grammar_rules benchmark requires precomputed Betlas rule-score columns; "
-            f"missing columns: {', '.join(missing)}. "
-            "Run 'betlas grammar score' and join the score columns, or remove grammar_rules from the benchmark config."
-        )
-    invalid: list[str] = []
-    for column in RULE_SCORE_COLUMNS:
-        values = pd.to_numeric(df[column], errors="coerce")
-        if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
-            invalid.append(column)
-    if invalid:
-        raise ValueError(
-            "grammar_rules benchmark requires finite numeric rule-score values; "
-            f"invalid columns: {', '.join(invalid)}"
-        )
 
 
 def _split_summary(
@@ -388,10 +314,8 @@ def _make_models(
 ) -> dict[str, Any]:
     include = set(_included_models(config))
     models: dict[str, Any] = {}
-    if "grammar_rules" in include:
-        models["grammar_rules"] = RuleScoreClassifier(labels=labels)
     if "logistic_l2" in include:
-        class_weight = _cfg_get(config, "logistic_l2.class_weight", "balanced")
+        class_weight = _cfg_get(config, "logistic_l2.class_weight", "balanced", allow_none=True)
         models["logistic_l2"] = Pipeline(
             [
                 ("imputer", SimpleImputer(strategy="median")),
@@ -409,7 +333,9 @@ def _make_models(
         )
         models["logistic_l2"].set_params(model__C=_cfg_float(config, "logistic_l2.C", 1.0))
     if "random_forest" in include:
-        rf_class_weight = _cfg_get(config, "random_forest.class_weight", "balanced_subsample")
+        rf_class_weight = _cfg_get(
+            config, "random_forest.class_weight", "balanced_subsample", allow_none=True
+        )
         models["random_forest"] = Pipeline(
             [
                 ("imputer", SimpleImputer(strategy="median")),
@@ -427,7 +353,7 @@ def _make_models(
             ]
         )
     if "extra_trees" in include:
-        et_class_weight = _cfg_get(config, "extra_trees.class_weight", "balanced")
+        et_class_weight = _cfg_get(config, "extra_trees.class_weight", "balanced", allow_none=True)
         models["extra_trees"] = Pipeline(
             [
                 ("imputer", SimpleImputer(strategy="median")),
@@ -687,7 +613,6 @@ def run_grouped_benchmark(
         if missing_group_count == 0
         else np.asarray([], dtype=object)
     )
-    missing_rule_scores = [column for column in RULE_SCORE_COLUMNS if column not in df.columns]
     base_preflight = {
         "input_rows": int(len(df_all)),
         "label_filtered_rows": int(label_mask.sum()),
@@ -704,8 +629,6 @@ def run_grouped_benchmark(
         "group_count": int(pd.Series(groups).astype(str).nunique()) if missing_group_count == 0 else 0,
         "feature_set": feature_set,
         "feature_count": int(len(feature_cols)),
-        "rule_score_columns_present": not missing_rule_scores,
-        "missing_rule_score_columns": missing_rule_scores,
         "required_global_classes": list(FOLD_LABELS),
         "missing_global_classes": sorted(set(FOLD_LABELS) - set(df["fold_label_final"].astype(str))),
         "require_all_fold_labels": True,
@@ -736,22 +659,6 @@ def run_grouped_benchmark(
             f"group identifier in {', '.join(BENCHMARK_GROUP_COLUMNS)}; "
             f"missing rows: {group_examples}"
         )
-    if "grammar_rules" in include and missing_rule_scores:
-        write_json(
-            out_dir / "benchmark_preflight.json",
-            {
-                **base_preflight,
-                "status": "failed",
-                "failure_stage": "feature_schema",
-                "effective_split_strategy": "not_run_missing_rule_scores",
-                "error": (
-                    "grammar_rules benchmark requires complete Betlas rule-score columns; "
-                    f"missing: {missing_rule_scores}"
-                ),
-                "model_dependency_status": {"grammar_rules": "requested"},
-            },
-        )
-        _validate_rule_score_values(df)
     missing_global_classes = sorted(set(FOLD_LABELS) - set(df["fold_label_final"].astype(str)))
     if missing_global_classes:
         write_json(
@@ -816,11 +723,6 @@ def run_grouped_benchmark(
     write_json(out_dir / "benchmark_preflight.json", preflight)
     if xgboost_missing_error:
         raise ValueError(xgboost_missing_error)
-    if "grammar_rules" in include:
-        _validate_rule_score_values(df)
-        X_rules = df[list(RULE_SCORE_COLUMNS)].apply(pd.to_numeric, errors="coerce")
-    else:
-        X_rules = pd.DataFrame(index=df.index)
     models = _make_models(random_state, tuple(encoder.classes_), benchmark_config)
     if (
         "xgboost_tuned" in include
@@ -845,7 +747,7 @@ def run_grouped_benchmark(
         )
         raise ValueError("benchmark config did not enable any available models")
     model_feature_columns = {
-        model_name: list(RULE_SCORE_COLUMNS) if model_name == "grammar_rules" else list(feature_cols)
+        model_name: list(feature_cols)
         for model_name in models
     }
 
@@ -858,7 +760,7 @@ def run_grouped_benchmark(
 
     for fold, (train_idx, test_idx) in enumerate(splits, start=1):
         for model_name, estimator in models.items():
-            X_model = X_rules if model_name == "grammar_rules" else X
+            X_model = X
             if estimator == "TUNED_XGBOOST":
                 model, trace = _inner_tune_xgb(
                     X_model.iloc[train_idx],
@@ -977,7 +879,7 @@ def run_grouped_benchmark(
     tuning_trace.to_csv(out_dir / "xgboost_tuning.csv", index=False)
     pd.DataFrame(
         [
-            {"model": model_name, "feature_set": "rules_only" if model_name == "grammar_rules" else feature_set, "feature": feature}
+            {"model": model_name, "feature_set": feature_set, "feature": feature}
             for model_name, columns in model_feature_columns.items()
             for feature in columns
         ]

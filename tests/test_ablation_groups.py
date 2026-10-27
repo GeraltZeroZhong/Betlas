@@ -6,7 +6,6 @@ import pytest
 from betlas.constants import FOLD_LABELS
 from betlas.ml.ablations import feature_group_for, run_ablation_suite
 from betlas.ml.benchmark import (
-    RuleScoreClassifier,
     _align_predict_proba,
     _connected_group_series,
     load_benchmark_config,
@@ -17,11 +16,11 @@ from betlas.specs import list_feature_specs
 
 
 def test_new_boundary_features_are_grouped() -> None:
-    assert feature_group_for("betlas_top2_sheet_order_nonlocal_fraction") == "sheet_order_topology"
-    assert feature_group_for("betlas_jelly_roll_order_nonlocal_score") == "sheet_order_topology"
-    assert feature_group_for("betlas_contact8_seq_gap_mean") == "contact_sequence_topology"
-    assert feature_group_for("betlas_sheet_pair_bilayer_score") == "sheet_pair_packing"
-    assert feature_group_for("betlas_axis_point_pc1_angular_coverage") == "axis_closure"
+    assert feature_group_for("betlas_top2_sheet_order_nonlocal_fraction") == "sheet_sequence_topology"
+    assert feature_group_for("betlas_jelly_roll_order_nonlocal_score") == "sheet_sequence_topology"
+    assert feature_group_for("betlas_contact8_seq_gap_mean") == "contact_graph"
+    assert feature_group_for("betlas_sheet_pair_valid_bilayer_score") == "sheet_pair_packing"
+    assert feature_group_for("betlas_axis_best_angular_coverage") == "axis_closure"
 
 
 def test_ablation_feature_groups_follow_public_feature_specs() -> None:
@@ -34,11 +33,6 @@ def test_ablation_feature_groups_follow_public_feature_specs() -> None:
     assert mismatches == []
 
 
-def test_rule_score_classifier_requires_rule_score_columns() -> None:
-    classifier = RuleScoreClassifier(labels=FOLD_LABELS)
-
-    with pytest.raises(ValueError, match="requires precomputed Betlas rule-score columns"):
-        classifier.predict_proba(pd.DataFrame({"betlas_axis_best_angular_coverage": [0.5]}))
 
 
 def test_default_benchmark_config_is_raw_geometry_sklearn_cold_start() -> None:
@@ -49,35 +43,6 @@ def test_default_benchmark_config_is_raw_geometry_sklearn_cold_start() -> None:
     assert "xgboost_tuned" not in config["models"]["include"]
 
 
-def test_benchmark_preflight_fails_fast_for_missing_rule_scores(tmp_path) -> None:
-    features = tmp_path / "features.csv"
-    out_dir = tmp_path / "benchmark"
-    pd.DataFrame(
-        [
-            {
-                "record_id": "r1",
-                "pdb_id": "p001",
-                "domain_id": "d1",
-                "fold_label_final": FOLD_LABELS[0],
-                "betlas_parse_ok": 1,
-                "betlas_axis_best_angular_coverage": 0.5,
-            }
-        ]
-    ).to_csv(features, index=False)
-
-    with pytest.raises(ValueError, match="missing columns"):
-        run_grouped_benchmark(
-            features,
-            out_dir,
-            config={"models": {"include": ["grammar_rules"]}},
-        )
-
-    preflight = pd.read_json(out_dir / "benchmark_preflight.json", typ="series")
-    assert preflight["status"] == "failed"
-    assert preflight["failure_stage"] == "feature_schema"
-    assert preflight["feature_set"] == "raw_geometry"
-    assert preflight["rule_score_columns_present"] is False
-    assert preflight["group_columns_priority"] == ["cath_s35_cluster_id", "cath_homology_code", "pdb_id"]
 
 
 def test_grouped_splits_fail_when_test_folds_cannot_cover_observed_classes() -> None:
@@ -232,7 +197,7 @@ def test_ablation_success_preflight_is_marked_ok(tmp_path) -> None:
                     "fold_label_final": label,
                     "betlas_parse_ok": 1,
                     "betlas_axis_best_angular_coverage": float(idx + group_id + 1),
-                    "betlas_sheet_pair_bilayer_score": float(idx + 2 * group_id + 1),
+                    "betlas_sheet_pair_valid_bilayer_score": float(idx + 2 * group_id + 1),
                 }
             )
     pd.DataFrame(rows).to_csv(features, index=False)
@@ -346,7 +311,9 @@ def test_benchmark_writes_preflight_before_xgboost_missing_error(tmp_path, monke
             rows.append(
                 {
                     "record_id": f"{label}_{group_id}",
-                    "pdb_id": f"p{group_id}{label[:2]}",
+                    # Two complete synthetic groups keep this dependency test
+                    # independent of version-specific stratification heuristics.
+                    "pdb_id": f"p{group_id}",
                     "domain_id": f"{label}_{group_id}",
                     "cath_s35_cluster_id": f"{label}_g{group_id}",
                     "fold_label_final": label,
@@ -380,7 +347,7 @@ def test_benchmark_preflight_fails_when_model_skip_leaves_no_runnable_models(tmp
             rows.append(
                 {
                     "record_id": f"{label}_{group_id}",
-                    "pdb_id": f"p{group_id}{label[:2]}",
+                    "pdb_id": f"p{group_id}",
                     "domain_id": f"{label}_{group_id}",
                     "cath_s35_cluster_id": f"{label}_g{group_id}",
                     "fold_label_final": label,

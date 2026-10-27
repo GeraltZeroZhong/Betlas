@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import re
 import subprocess
@@ -279,6 +280,9 @@ def _invoke_juchmme(
     timeout: float | None,
 ) -> str:
     if command_prefix is None:
+        expanded_executable = os.path.expanduser(java_executable)
+        if os.path.dirname(expanded_executable):
+            java_executable = str(Path(expanded_executable).resolve())
         root = _resolve_juchmme_dir(juchmme_dir)
         classpath_path = _resolve_child(root, classpath, "JUCHMME classpath")
         command_start = [java_executable, "-cp", str(classpath_path), "hmm.Juchmme"]
@@ -318,6 +322,9 @@ def _invoke_juchmme(
         text=True,
         timeout=timeout,
     )
+    (work_dir / "command.json").write_text(json.dumps(command, indent=2) + "\n")
+    (work_dir / "stdout.txt").write_text(completed.stdout)
+    (work_dir / "stderr.txt").write_text(completed.stderr)
     if completed.returncode != 0:
         stdout = completed.stdout.strip()
         stderr = completed.stderr.strip()

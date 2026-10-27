@@ -12,7 +12,6 @@ import pandas as pd
 from tqdm import tqdm
 
 from .assets import (
-    DEFAULT_ASSET_BASE_URL,
     AssetError,
     asset_file_report,
     describe_asset,
@@ -28,22 +27,20 @@ from .constants import (
     DEFAULT_LABELS_CSV,
     DEFAULT_MMCIF_DIR,
     DEFAULT_RUN_DIR,
-    FOLD_LABELS,
 )
 from .examples import copy_example, list_examples
+from .features.current import FEATURE_COLUMNS, FEATURE_SCHEMA
 from .features.extract import (
     assert_no_diagnostic_label_leakage,
     extract_feature_row,
     extract_structure_features,
 )
-from .features.rules import missing_or_invalid_rule_inputs
-from .grammars import explain_fold_grammar, get_grammar, list_grammars
+from .grammars import get_grammar, list_grammars
 from .io.cath import build_cath_dataset, domain_from_row
 from .io.mmcif import inspect_mmcif_chains, is_mmcif_path
 from .io.rcsb import download_mmcifs, mmcif_path_for
 from .provenance import build_run_manifest, file_state, write_json
 from .readouts import list_readouts, run_readout
-from .schema import normalize_feature_columns
 from .slicing import SliceConfig, slice_mmcif, summarize_slices
 from .specs import list_feature_specs, list_readout_column_specs
 
@@ -64,15 +61,15 @@ def _require_file(path_value: str | Path, *, label: str) -> Path:
         if label.lower().startswith("feature") and path == DEFAULT_FEATURES_CSV:
             hint = (
                 "; this is the default output path. Run "
-                "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out runs/features.csv` "
-                "and pass `--features runs/features.csv`, or run the documented quickstart first"
+                "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out outputs/features.csv` "
+                "and pass `--features outputs/features.csv`, or run the documented quickstart first"
             )
         elif label.lower().startswith("label") and path == DEFAULT_LABELS_CSV:
             hint = (
                 "; for a single structure, run "
-                "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out runs/features.csv`; "
+                "`betlas extract-features --structure STRUCTURE.cif --chain CHAIN --out outputs/features.csv`; "
                 "for batch CATH labels, run "
-                "`betlas build-dataset --out data/processed/betlas_full_labels.csv` first"
+                "`betlas build-dataset --out outputs/labels.csv` first"
             )
         raise FileNotFoundError(f"{label} file does not exist: {path}{hint}")
     if not path.is_file():
@@ -100,6 +97,8 @@ def _structure_failed_row(args: argparse.Namespace, structure_state: dict[str, A
         "source_mmcif_sha256": structure_state["sha256"],
         "source_mmcif_size": structure_state["size"],
         "source_mmcif_exists": int(bool(structure_state["exists"])),
+        **dict.fromkeys(FEATURE_COLUMNS, float("nan")),
+        "feature_schema": FEATURE_SCHEMA,
         "betlas_parse_ok": 0,
         "betlas_warnings": "",
         "betlas_error": f"{type(error).__name__}: {error}",
@@ -393,158 +392,10 @@ def grammar_describe_command(args: argparse.Namespace) -> None:
             print(f"  - {note}")
 
 
-def _grammar_parse_failure_detail(row: dict[str, Any]) -> str:
-    warning = row.get("betlas_warnings", "")
-    error = row.get("betlas_error", "")
-    detail = str(error or warning or "betlas_parse_ok is not 1")
-    return detail.split(" Use --write-failed-row", 1)[0].strip().rstrip(".")
 
 
-def _grammar_status_only_reason(row: dict[str, Any]) -> str:
-    status = str(row.get("betlas_score_status", "")).strip()
-    if status in {"parse_failed", "no_informative_slices"}:
-        return status
-    return ""
 
 
-def grammar_score_command(args: argparse.Namespace) -> None:
-    features_path = _require_file(args.features, label="feature CSV")
-    raw_features = pd.read_csv(features_path, dtype=str, keep_default_na=False)
-    compatibility_columns = [str(column) for column in raw_features.columns if str(column).startswith("cz_")]
-    if args.strict and compatibility_columns:
-        raise ValueError(
-            "grammar score strict validation requires canonical betlas_* columns; "
-            f"found compatibility columns: {', '.join(compatibility_columns[:8])}. "
-            "Use --no-strict only for compatibility scoring of older feature tables."
-        )
-    features = normalize_feature_columns(raw_features)
-    strict_problems: list[str] = []
-    parse_failures: list[str] = []
-    if "betlas_parse_ok" in features.columns:
-        parse_ok = pd.to_numeric(features["betlas_parse_ok"], errors="coerce").fillna(0).astype(int)
-    elif args.strict:
-        raise ValueError(
-            "grammar score strict validation requires betlas_parse_ok=1 in the feature CSV. "
-            "Generate a canonical feature table first with `betlas extract-features --structure STRUCTURE.cif "
-            "--chain CHAIN --out runs/features.csv`. "
-            "Use --no-strict only for compatibility scoring of older feature tables."
-        )
-    else:
-        parse_ok = pd.Series([1] * len(features), index=features.index, dtype=int)
-    if not args.allow_parse_fail and "betlas_parse_ok" in features.columns:
-        for index, row in enumerate(features.to_dict(orient="records"), start=1):
-            if int(parse_ok.iloc[index - 1]) != 1:
-                row_id = row.get("record_id", f"row {index}")
-                detail = _grammar_parse_failure_detail(row)
-                parse_failures.append(f"{row_id}: {detail}")
-        if parse_failures:
-            examples = "; ".join(parse_failures[:5])
-            more = f"; plus {len(parse_failures) - 5} more row(s)" if len(parse_failures) > 5 else ""
-            raise ValueError(
-                "grammar score refused parse-failed feature rows: "
-                f"{examples}{more}. Use --allow-parse-fail only to write status-only failed rows."
-            )
-    if args.strict:
-        for index, row in enumerate(features.to_dict(orient="records"), start=1):
-            if int(parse_ok.iloc[index - 1]) != 1:
-                continue
-            if _grammar_status_only_reason(row):
-                continue
-            problems = missing_or_invalid_rule_inputs(row)
-            if problems:
-                details = ", ".join(f"{name}={reason}" for name, reason in sorted(problems.items())[:8])
-                suffix = " ..." if len(problems) > 8 else ""
-                row_id = row.get("record_id", f"row {index}")
-                strict_problems.append(f"{row_id}: {details}{suffix}")
-        if strict_problems:
-            examples = "; ".join(strict_problems[:5])
-            more = f"; plus {len(strict_problems) - 5} more row(s)" if len(strict_problems) > 5 else ""
-            raise ValueError(
-                "grammar score strict validation failed; required Betlas rule-score input "
-                f"columns are missing or invalid: {examples}{more}. "
-                "Use --no-strict only for exploratory scoring of incomplete feature tables."
-            )
-    rows: list[dict[str, Any]] = []
-    passthrough_columns = [
-        "record_id",
-        "pdb_id",
-        "chain_id",
-        "domain_id",
-        "source_mmcif_path",
-        "source_mmcif_sha256",
-        "source_mmcif_size",
-        "source_mmcif_exists",
-        "betlas_parse_ok",
-        "betlas_error",
-        "betlas_warnings",
-    ]
-    for index, row in enumerate(features.to_dict(orient="records")):
-        out_row: dict[str, Any] = {
-            column: row.get(column, "")
-            for column in passthrough_columns
-            if column in features.columns or column in {"record_id", "pdb_id", "chain_id", "domain_id"}
-        }
-        if int(parse_ok.iloc[index]) != 1:
-            out_row["betlas_score_status"] = "parse_failed"
-            rows.append(out_row)
-            continue
-        status_only = _grammar_status_only_reason(row)
-        if status_only:
-            out_row["betlas_score_status"] = status_only
-            rows.append(out_row)
-            continue
-        explanation = explain_fold_grammar(row, fold=args.fold, strict=args.strict)
-        out_row["betlas_score_status"] = "ok"
-        out_row.update(
-            {
-                "betlas_top_fold": explanation["top_fold"],
-                "betlas_rule_margin": explanation["margin"],
-                "betlas_fold_scores_json": explanation["scores_json"],
-            }
-        )
-        for label, score in explanation["scores"].items():
-            out_row[f"betlas_rule_score_{label}"] = float(score)
-        if args.fold is not None:
-            out_row["requested_fold"] = args.fold
-            out_row["requested_score"] = explanation["requested_score"]
-            out_row["requested_rank"] = explanation["requested_rank"]
-        rows.append(out_row)
-    output = pd.DataFrame(rows)
-    if args.out:
-        path = Path(args.out)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        output.to_csv(path, index=False)
-        if "betlas_parse_ok" in features.columns:
-            parse_ok_rows = int(
-                pd.to_numeric(features["betlas_parse_ok"], errors="coerce")
-                .fillna(0)
-                .astype(int)
-                .sum()
-            )
-        else:
-            parse_ok_rows = int(len(output))
-        write_json(
-            path.with_suffix(f"{path.suffix}.manifest.json"),
-            build_run_manifest(
-                command="betlas grammar score",
-                parameters={
-                    "features": str(features_path),
-                    "fold": args.fold,
-                    "strict": bool(args.strict),
-                    "allow_parse_fail": bool(args.allow_parse_fail),
-                },
-                inputs={"features_csv": features_path},
-                outputs={"rule_scores_csv": path},
-                metrics={
-                    "rows": int(len(output)),
-                    "parse_ok_rows": parse_ok_rows,
-                },
-                extra={"features_file": file_state(features_path)},
-            ),
-        )
-        print(f"Wrote {len(output)} grammar score rows to {path}")
-    else:
-        print(output.to_csv(index=False), end="")
 
 
 def readout_command(args: argparse.Namespace) -> None:
@@ -584,7 +435,7 @@ def assets_describe_command(args: argparse.Namespace) -> None:
     if release_status.lower() == "pending_release":
         print("Download base: explicit BETLAS_ASSET_BASE_URL or --base-url local mirror required")
     else:
-        print(f"Default base URL: {DEFAULT_ASSET_BASE_URL}")
+        print("Asset source: pass --base-url or set BETLAS_ASSET_BASE_URL")
     print("Files:")
     for file_info in manifest.get("files", []):
         purpose = str(file_info.get("purpose", "")).strip()
@@ -986,6 +837,52 @@ def slice_command(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def predict_command(args: argparse.Namespace) -> None:
+    """Apply a task checkpoint to a structure or descriptor table."""
+    from .prediction import predict_features, predict_structure
+
+    options = {"checkpoint": args.checkpoint, "cache_dir": args.cache_dir, "allow_download": not args.offline}
+    if args.task == "barrel-strands":
+        options.update(assume_barrel=args.assume_barrel, barrel_checkpoint=args.barrel_checkpoint)
+    if args.structure:
+        if not args.chain:
+            raise ValueError("--chain is required with --structure")
+        rows = [predict_structure(args.task, args.structure, chain_id=args.chain,
+                dssp_binary=args.dssp_binary, model_id=args.model_id,
+                residue_ranges=args.residue_ranges, **options)]
+    else:
+        table = pd.read_csv(_require_file(args.features, label="feature CSV"), dtype={"record_id": str, "chain_id": str})
+        if table.empty:
+            raise ValueError("Feature CSV contains no records")
+        rows = []
+        for record in table.to_dict(orient="records"):
+            result = predict_features(args.task, record, **options)
+            rows.append({**{key: record[key] for key in ("record_id", "chain_id") if key in record}, **result})
+    output = pd.DataFrame(rows)
+    if args.out and not _is_stdout_path(args.out):
+        target = Path(args.out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.suffix.lower() == ".json":
+            target.write_text(output.to_json(orient="records", indent=2, double_precision=15) + "\n", encoding="utf-8")
+        else:
+            output.to_csv(target, index=False)
+    else:
+        output.to_csv(sys.stdout, index=False)
+
+
+def checkpoints_command(args: argparse.Namespace) -> None:
+    """Inspect or install the three version-pinned model checkpoints."""
+    from .prediction import install_checkpoint, list_checkpoints
+
+    if args.checkpoint_command == "list":
+        print(json.dumps(list_checkpoints(), indent=2))
+        return
+    tasks = ("solenoid", "barrel", "barrel-strands") if args.task == "all" else (args.task,)
+    for task in tasks:
+        path = install_checkpoint(task, cache_dir=args.cache_dir, base_url=args.base_url)
+        print(f"{task}\t{path}")
+
+
 def main(argv: list[str] | None = None) -> None:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if (
@@ -1004,15 +901,15 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="betlas",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Betlas command-line tools for beta-structure geometry features, grammar scores, readouts, benchmarks, and release assets.",
+        description="Betlas command-line tools for beta-structure geometry features, descriptor families, learned applications, benchmarks, and model checkpoints.",
         epilog=(
             "Common workflows:\n"
-            "  betlas examples copy mini --out-dir runs/examples\n"
-            "  betlas extract-features --structure runs/examples/mini.cif --chain A --out runs/mini_features.csv\n"
-            "  betlas grammar score --features runs/mini_features.csv --out runs/mini_rule_scores.csv\n"
+            "  betlas examples copy mini --out-dir outputs/examples\n"
+            "  betlas extract-features --structure outputs/examples/mini.cif --chain A --out outputs/mini_features.csv\n"
+            "  betlas grammar list\n"
             "  betlas slice structure.cif --chain A\n"
-            "  betlas readout beta-barrel-detection structure.cif --out runs/detection.csv\n"
-            "  betlas assets describe betlas-beta-barrel-detection-official-v1\n\n"
+            "  betlas predict barrel --structure structure.cif --chain A --out outputs/barrel.csv\n"
+            "  betlas assets describe example-assets\n\n"
             "Use '<command> --help' for command-specific inputs, outputs, and examples."
         ),
     )
@@ -1030,7 +927,7 @@ def main(argv: list[str] | None = None) -> None:
         description="Build a Betlas label table from local CATH source files.",
         epilog=(
             "Examples:\n"
-            "  betlas build-dataset --all-eligible --out runs/betlas_cath_labels.csv\n"
+            "  betlas build-dataset --all-eligible --out outputs/betlas_cath_labels.csv\n"
             "  betlas build-dataset --sample-balanced --target-per-class 220 --seed 13\n\n"
             "CATH inputs: if required source files are absent from --cath-dir, Betlas downloads the "
             "current CATH daily files. For pinned/reproducible runs, populate --cath-dir from a local mirror first.\n"
@@ -1068,15 +965,15 @@ def main(argv: list[str] | None = None) -> None:
         help="Download mmCIF files and extract Betlas features.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Write Betlas geometry grammar features from either a label table plus downloaded mmCIF files "
+            "Write the 136 current Betlas descriptors from either a label table plus downloaded mmCIF files "
             "or one user-provided mmCIF chain."
         ),
         epilog=(
             "Examples:\n"
-            "  betlas extract-features --labels runs/labels.csv --out runs/features.csv\n"
-            "  betlas extract-features --labels runs/labels.csv --mmcif-dir cache/mmcif --workers 8\n\n"
-            "  betlas extract-features --structure runs/examples/mini.cif --chain A --out runs/mini_features.csv\n"
-            "  betlas grammar score --features runs/mini_features.csv\n\n"
+            "  betlas extract-features --labels outputs/labels.csv --out outputs/features.csv\n"
+            "  betlas extract-features --labels outputs/labels.csv --mmcif-dir cache/mmcif --workers 8\n\n"
+            "  betlas extract-features --structure outputs/examples/mini.cif --chain A --out outputs/mini_features.csv\n"
+            "  betlas grammar list\n\n"
             "Single-structure input currently accepts mmCIF files: .cif, .mmcif, .cif.gz, .mmcif.gz.\n"
             "Multi-model mmCIF inputs default to --model-id 0, the first mmCIF model.\n"
             "Selected grammar/slice residues must use numeric author residue IDs; insertion-code ranges are rejected.\n"
@@ -1111,8 +1008,8 @@ def main(argv: list[str] | None = None) -> None:
         description="Evaluate Betlas feature tables with grouped cross-validation and configured model families.",
         epilog=(
             "Examples:\n"
-            "  betlas benchmark --features runs/features.csv --out-dir runs/benchmark\n"
-            "  betlas benchmark --features runs/features.csv --splits 5 --seed 13 --config custom_benchmark.yaml\n\n"
+            "  betlas benchmark --features outputs/features.csv --out-dir outputs/benchmark\n"
+            "  betlas benchmark --features outputs/features.csv --splits 5 --seed 13 --config custom_benchmark.yaml\n\n"
             "Outputs: metrics summary, per-fold metrics, out-of-fold predictions, and run metadata under --out-dir."
         ),
     )
@@ -1130,13 +1027,13 @@ def main(argv: list[str] | None = None) -> None:
         description="Measure feature-family and feature-block contributions using grouped benchmark splits.",
         epilog=(
             "Examples:\n"
-            "  betlas ablate --features runs/features.csv --out-dir runs/ablations\n"
-            "  betlas ablate --features runs/features.csv --max-group-combo-size 3 --config custom_ablation.yaml\n\n"
+            "  betlas ablate --features outputs/features.csv --out-dir outputs/ablations\n"
+            "  betlas ablate --features outputs/features.csv --max-group-combo-size 3 --config custom_ablation.yaml\n\n"
             "Outputs: baseline metrics, drop-group metrics, drop-feature metrics, and delta tables under --out-dir."
         ),
     )
     ablate.add_argument("--features", default=str(DEFAULT_FEATURES_CSV), help="Input Betlas feature CSV.")
-    ablate.add_argument("--out-dir", default="runs/betlas_full_ablations", help="Directory for ablation outputs.")
+    ablate.add_argument("--out-dir", default="outputs/ablations", help="Directory for ablation outputs.")
     ablate.add_argument("--splits", type=int, default=5, help="Grouped cross-validation split count.")
     ablate.add_argument("--seed", type=int, default=13, help="Random seed for splits and compatible models.")
     ablate.add_argument("--max-group-combo-size", type=int, default=3, help="Largest feature-group combination size to evaluate.")
@@ -1145,15 +1042,14 @@ def main(argv: list[str] | None = None) -> None:
 
     grammar = sub.add_parser(
         "grammar",
-        help="Inspect and score Betlas geometry grammars.",
+        help="Inspect the current geometric descriptor families.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="List geometry grammar families, describe their mathematical implementation, or score fold rules from a feature table.",
+        description="List the current descriptor families and describe their mathematical definitions.",
         epilog=(
             "Examples:\n"
             "  betlas grammar list\n"
             "  betlas grammar describe sheet_pair_packing\n"
-            "  betlas grammar describe fold_rule_scores --format json\n"
-            "  betlas grammar score --features runs/features.csv --out runs/rule_scores.csv"
+            "  betlas grammar describe sheet_pair_packing --format json"
             " --strict"
         ),
     )
@@ -1164,41 +1060,6 @@ def main(argv: list[str] | None = None) -> None:
     grammar_describe.add_argument("name", help="Grammar name from 'betlas grammar list'.")
     grammar_describe.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     grammar_describe.set_defaults(func=grammar_describe_command)
-    grammar_score = grammar_sub.add_parser(
-        "score",
-        help="Score fold grammar rules from a feature table.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Compute transparent Betlas fold-rule scores for every row in a feature table.",
-        epilog=(
-            "Strict validation is enabled by default and requires the Betlas geometry columns consumed by "
-            "the transparent rule formulas. Use --no-strict only for exploratory scoring of incomplete tables.\n"
-            "Output columns include record identifiers, betlas_top_fold, betlas_rule_margin, "
-            "and one betlas_rule_score_<fold> column per fold label."
-        ),
-    )
-    grammar_score.add_argument("--features", default=str(DEFAULT_FEATURES_CSV), help="Input Betlas feature CSV.")
-    grammar_score.add_argument("--fold", choices=list(FOLD_LABELS), default=None, help="Optional fold label to add requested-score and requested-rank columns.")
-    grammar_score.add_argument("--out", default=None, help="Output CSV path. Defaults to stdout.")
-    grammar_score.add_argument(
-        "--strict",
-        dest="strict",
-        action="store_true",
-        default=True,
-        help="Validate required rule-score input columns before scoring (default).",
-    )
-    grammar_score.add_argument(
-        "--no-strict",
-        dest="strict",
-        action="store_false",
-        help="Allow missing or nonnumeric rule-score inputs to use the compatibility zero-fill behavior.",
-    )
-    grammar_score.add_argument(
-        "--allow-parse-fail",
-        action="store_true",
-        help="Carry betlas_parse_ok != 1 rows through as status-only rows without fold calls or rule scores.",
-    )
-    grammar_score.set_defaults(func=grammar_score_command)
-
     chains = sub.add_parser(
         "chains",
         help="Inspect mmCIF author/label chains and annotation availability.",
@@ -1206,8 +1067,8 @@ def main(argv: list[str] | None = None) -> None:
         description="Inspect chains in one mmCIF/mmCIF.gz structure before choosing --chain for Betlas workflows.",
         epilog=(
             "Examples:\n"
-            "  betlas chains runs/examples/mini.cif\n"
-            "  betlas chains runs/examples/mini.cif --format json\n\n"
+            "  betlas chains outputs/examples/mini.cif\n"
+            "  betlas chains outputs/examples/mini.cif --format json\n\n"
             "Outputs: author chain id, label chain ids, standard CA residue counts, "
             "sheet/helix annotation availability, and supported workflow hints."
         ),
@@ -1230,8 +1091,8 @@ def main(argv: list[str] | None = None) -> None:
         description="Inspect chains in one mmCIF/mmCIF.gz structure before choosing --chain for Betlas workflows.",
         epilog=(
             "Examples:\n"
-            "  betlas structure inspect runs/examples/mini.cif\n"
-            "  betlas structure inspect runs/examples/mini.cif --format json\n\n"
+            "  betlas structure inspect outputs/examples/mini.cif\n"
+            "  betlas structure inspect outputs/examples/mini.cif --format json\n\n"
             "Outputs: author chain id, label chain ids, standard CA residue counts, "
             "sheet/helix annotation availability, and supported workflow hints."
         ),
@@ -1250,9 +1111,9 @@ def main(argv: list[str] | None = None) -> None:
         ),
         epilog=(
             "Examples:\n"
-            "  betlas slice 1abc.cif --chain A\n"
-            "  betlas slice 1abc.cif --chain A --axis best --out runs/slices.csv --summary-out runs/slice_summary.json\n"
-            "  betlas slice 1abc.cif --chain A --residue-ranges 10-180:A --points-out runs/slice_points.csv\n\n"
+            "  betlas slice structure.cif --chain A\n"
+            "  betlas slice structure.cif --chain A --axis best --out outputs/slices.csv --summary-out outputs/slice_summary.json\n"
+            "  betlas slice structure.cif --chain A --residue-ranges 10-180:A --points-out outputs/slice_points.csv\n\n"
             "Output summary keys match the unprefixed values behind betlas_axis_best_* feature columns. "
             "The default axis is the same best-axis scoring rule used during Betlas feature extraction. "
             "Multi-model mmCIF inputs default to --model-id 0, the first mmCIF model. "
@@ -1280,7 +1141,7 @@ def main(argv: list[str] | None = None) -> None:
         "readout",
         help="Run or inspect Betlas secondary readouts.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="List or run Betlas secondary readouts for beta-barrel detection, stave counting, and topology diagnostics.",
+        description="List or run Betlas secondary readouts for beta-barrel detection, stave counting, and geometric layer measurements.",
         epilog="Use 'betlas readout <name> --help' for readout-specific inputs, outputs, and Hydra override examples.",
     )
     readout_sub = readout.add_subparsers(dest="readout_command", required=True)
@@ -1297,18 +1158,52 @@ def main(argv: list[str] | None = None) -> None:
         readout_parser.add_argument("readout_args", nargs=argparse.REMAINDER)
         readout_parser.set_defaults(func=readout_command, readout_name=spec.name)
 
+    predict = sub.add_parser("predict", help="Recognise solenoids or barrels, or count barrel-wall strands.")
+    predict_sub = predict.add_subparsers(dest="task", required=True)
+    for task, summary in (
+        ("solenoid", "Recognise solenoid architecture from 136 geometric descriptors."),
+        ("barrel", "Recognise a geometric beta barrel from 136 descriptors."),
+        ("barrel-strands", "Count barrel-wall strands using 136 descriptors and 16 radial measurements."),
+    ):
+        task_parser = predict_sub.add_parser(task, help=summary, description=summary)
+        source = task_parser.add_mutually_exclusive_group(required=True)
+        source.add_argument("--structure", help="Local PDB or mmCIF structure, optionally gzip-compressed.")
+        source.add_argument("--features", help="CSV with current descriptors; counting also requires 16 radial measurements.")
+        task_parser.add_argument("--chain", help="Author chain identifier; required with --structure.")
+        task_parser.add_argument("--model-id", type=int, default=0, help="Zero-based structure model index.")
+        task_parser.add_argument("--residue-ranges", default="", help="Author residue ranges for a solenoid domain, for example 10-180:A.")
+        task_parser.add_argument("--dssp-binary", default="mkdssp", help="DSSP executable for structure annotation.")
+        task_parser.add_argument("--checkpoint", help="Local task checkpoint JSON; otherwise install the released checkpoint on first use.")
+        task_parser.add_argument("--cache-dir", help="Checkpoint cache directory.")
+        task_parser.add_argument("--offline", action="store_true", help="Use only local or cached checkpoints.")
+        task_parser.add_argument("--out", help="Output CSV or .json; stdout by default.")
+        if task == "barrel-strands":
+            task_parser.add_argument("--assume-barrel", action="store_true", help="Count a known barrel directly, bypassing the recognition gate.")
+            task_parser.add_argument("--barrel-checkpoint", help="Local barrel-recognition checkpoint for the counting gate.")
+        task_parser.set_defaults(func=predict_command)
+
+    checkpoints = sub.add_parser("checkpoints", help="List or install released model checkpoints.")
+    checkpoint_sub = checkpoints.add_subparsers(dest="checkpoint_command", required=True)
+    checkpoint_list = checkpoint_sub.add_parser("list", help="Show checkpoint versions and integrity metadata.")
+    checkpoint_list.set_defaults(func=checkpoints_command)
+    checkpoint_install = checkpoint_sub.add_parser("install", help="Download and verify checkpoints into the cache.")
+    checkpoint_install.add_argument("task", choices=["all", "solenoid", "barrel", "barrel-strands"])
+    checkpoint_install.add_argument("--cache-dir", help="Checkpoint cache directory.")
+    checkpoint_install.add_argument("--base-url", help="Release mirror URL or local checkpoint directory.")
+    checkpoint_install.set_defaults(func=checkpoints_command)
+
     assets = sub.add_parser(
         "assets",
-        help="Inspect, download, and verify Betlas release assets.",
+        help="Inspect, download, and verify Betlas manifest assets.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Use packaged Betlas manifests to locate, download, and verify release asset files.",
+        description="Use BETLAS_ASSET_MANIFEST_DIR to select manifests for locating and verifying asset files.",
         epilog=(
             "Examples:\n"
             "  betlas assets list\n"
-            "  betlas assets describe betlas-beta-barrel-detection-official-v1\n"
-            "  betlas assets download betlas-beta-barrel-detection-official-v1\n"
-            "  betlas assets download betlas-beta-barrel-staves-official-v1 --base-url /mirror/betlas-assets\n"
-            "  betlas assets verify betlas-beta-barrel-detection-official-v1 --strict\n\n"
+            "  betlas assets describe example-assets\n"
+            "  betlas assets download example-assets --base-url ./asset-source\n"
+            "  betlas assets download example-assets --base-url /mirror/betlas-assets\n"
+            "  betlas assets verify example-assets --strict\n\n"
             "BETLAS_ASSET_BASE_URL or --base-url can point at a local mirror; BETLAS_ASSET_DIR "
             "or ~/.cache/betlas/assets controls the local cache."
         ),
@@ -1327,9 +1222,9 @@ def main(argv: list[str] | None = None) -> None:
         description="Download release asset files into the Betlas cache with atomic writes and SHA-256/size verification.",
         epilog=(
             "Examples:\n"
-            "  betlas assets download betlas-beta-barrel-staves-official-v1"
+            "  betlas assets download example-assets --base-url ./asset-source"
             "\n"
-            "  betlas assets download betlas-beta-barrel-staves-official-v1 --base-url /mirror/betlas-assets --file betlas_151_chain_features.csv"
+            "  betlas assets download example-assets --base-url /mirror/betlas-assets --file features.csv"
         ),
     )
     assets_download.add_argument("asset_id", help="Asset id from 'betlas assets list'.")
@@ -1337,7 +1232,7 @@ def main(argv: list[str] | None = None) -> None:
     assets_download.add_argument(
         "--base-url",
         default=None,
-        help="Local mirror or released base URL. Defaults to the packaged Betlas release URL.",
+        help="Local mirror or released base URL. Set this option or BETLAS_ASSET_BASE_URL to select the source.",
     )
     assets_download.add_argument("--file", action="append", default=None, help="Download one file from the bundle; repeat for multiple files.")
     assets_download.add_argument("--force", action="store_true", help="Replace existing cached files after re-downloading and verifying them.")
@@ -1345,7 +1240,7 @@ def main(argv: list[str] | None = None) -> None:
     assets_verify = assets_sub.add_parser(
         "verify",
         help="Verify cached Betlas asset files against manifest hashes.",
-        description="Check cached files against the packaged manifest byte size and SHA-256 values.",
+        description="Check cached files against the selected manifest byte size and SHA-256 values.",
     )
     assets_verify.add_argument("asset_id", help="Asset id from 'betlas assets list'.")
     assets_verify.add_argument("--cache-dir", default=None, help="Asset cache directory. Defaults to BETLAS_ASSET_DIR or ~/.cache/betlas/assets.")
@@ -1362,7 +1257,7 @@ def main(argv: list[str] | None = None) -> None:
     assets_path.add_argument(
         "--base-url",
         default=None,
-        help="Local mirror or released base URL. Defaults to the packaged Betlas release URL.",
+        help="Local mirror or released base URL. Set this option or BETLAS_ASSET_BASE_URL to select the source.",
     )
     assets_path.set_defaults(func=assets_path_command)
     assets_esmc = assets_sub.add_parser(
@@ -1385,7 +1280,7 @@ def main(argv: list[str] | None = None) -> None:
         epilog=(
             "Examples:\n"
             "  betlas examples list\n"
-            "  betlas examples copy mini --out-dir runs/examples"
+            "  betlas examples copy mini --out-dir outputs/examples"
         ),
     )
     examples_sub = examples.add_subparsers(dest="examples_command", required=True)

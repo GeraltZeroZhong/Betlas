@@ -1,46 +1,64 @@
-# IsItABarrel Structure-Map Baseline
+# IsItABarrel contact-map adapter
 
-This adapter treats
-[SluskyLab/isitabarrel](https://github.com/SluskyLab/isitabarrel) as an
-external comparison method for Betlas beta-barrel detection evaluation. The
-adapter name is `isitabarrel_structure_map` because it runs IsItABarrel
-heuristics on contact maps derived from PDB/CIF structures.
-
-The upstream script is not vendored. This directory only contains the
-invocation layer, structure-to-contact-map conversion, and normalized output
-parser.
-
-## Expected Inputs
-
-- a protein-id list, one id per line or as the first tab-separated column
-- a directory containing one contact-map pickle per id, named `<id>.pkl`
-- an `isitabarrel.py` checkout, passed with `--script` or
-  `ISITABARREL_SCRIPT`
-
-The normalized CSV contains:
-
-- `baseline`: `isitabarrel_structure_map`
-- `sample_id`: upstream `MAP_NAME`
-- `result`: `BARREL` when the selected score is greater than zero, otherwise
-  `NON_BARREL`
-- `score`: selected decision score, defaulting to `CC2_TO_H4`
-
-## Structure Map Workflow
+For the specialist comparison:
 
 ```bash
-PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/isitabarrel/structure_map.py \
-  path/to/structures \
-  --out-dir eval_outputs/isitabarrel_structure_map \
-  --script /path/to/isitabarrel.py \
-  --out eval_outputs/isitabarrel_structure_map.csv
+python -m scripts.external_baselines.beta_barrel_detection.isitabarrel.specialist \
+  structure.cif --sample-id example --chain A --script /path/to/isitabarrel.py \
+  --python /path/to/python --out-dir output/isitabarrel-example
 ```
 
-The generator writes:
+This selects exactly one model/author chain and records native logs and a
+normalized `result.json`. Errors retain an unavailable status. Its normalized
+`score` is null: native `CC2_TO_H4` combines closing-contact magnitude and
+alternative hairpin counts, which supports the native hard call. The native
+value remains in `native_result`; prediction uses the published `> 0` hard call.
+AP and ROC ranking require a suitable continuous score.
+This variant derives contact maps from coordinates. The original method targets
+bacterial transmembrane barrels through evolutionary contact prediction;
+membrane insertion requires separate evidence. Contact-map indices follow
+observed CA residue order, matching the reused Cooper-Beta comparison
+implementation. The mapping preserves gaps and insertion codes, with missing
+positions left unfilled.
 
-- `maps/<sample_id>.pkl`: NumPy `float32` `L x L` contact maps
-- `protid_list.tsv`: sample ids for the upstream script
-- `residue_mapping.csv`: matrix index to source residue mapping
+This adapter runs the official
+[IsItABarrel implementation](https://github.com/SluskyLab/isitabarrel), which must
+be obtained and installed separately under its upstream license. It also converts
+structures into the contact-map format consumed by that implementation.
 
-The default map uses CA-CA contacts within 8.0 Angstrom, masks contacts with
-sequence distance of two residues or less, and skips chains with fewer than 15
-CA residues to avoid upstream indexing failures on very short chains.
+```bash
+python -m scripts.external_baselines.beta_barrel_detection.isitabarrel.structure_map \
+  input_structures --script /path/to/isitabarrel.py \
+  --out-dir output/isitabarrel --out output/isitabarrel/predictions.csv
+```
+
+Contact maps use CA distances in Angstrom, a configurable 8 Angstrom cutoff,
+and zeroed contacts at sequence distance two or less. Each map is a float32
+matrix stored in the upstream pickle format. The default 15-residue minimum
+avoids an upstream indexing failure on short chains. These maps represent
+contacts in the supplied coordinates.
+`contact_maps` generates the maps, protein-ID list, and residue mapping alone.
+
+For existing contact maps:
+
+```bash
+python -m scripts.external_baselines.beta_barrel_detection.isitabarrel.runner \
+  protein_ids.txt contact_maps --script /path/to/isitabarrel.py \
+  --work-dir output/isitabarrel-work --out output/isitabarrel.csv
+```
+
+`--script` or `ISITABARREL_SCRIPT` selects the upstream script; `--python` selects
+its Python environment. Additional upstream options follow `--`. Supply contact
+maps you trust: their pickle format is consumed by the upstream Python program.
+The adapter parses `results.tsv`, requires `MAP_NAME` and the chosen score column,
+and assigns `BARREL` to scores greater than zero. The default decision column is
+`CC2_TO_H4`; `--decision-column` can select another upstream score.
+Normalized CSV rows contain `sample_id`, `result`, `score`, `decision_column`, and
+available `CC2`, `BSS`, `H4`, and ratio scores.
+
+```bash
+python -m scripts.external_baselines.beta_barrel_detection.isitabarrel.evaluate_dataset \
+  --positive-dir positive_structures --negative-dir negative_structures \
+  --script /path/to/isitabarrel.py --out-dir output/isitabarrel-evaluation \
+  --tag example
+```

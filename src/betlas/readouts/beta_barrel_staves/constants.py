@@ -16,6 +16,8 @@ MIN_ANGULAR_GAP_POINTS = 5
 MIN_SEQUENCE_ANGLE_ORDER_POINTS = 6
 SMALL_NEAREST_NEIGHBOR_MATRIX_POINTS = 64
 
+# Normal-distribution consistency factor for median absolute deviation:
+# approximately 1 / Phi^-1(0.75), where Phi is the standard normal CDF.
 ROBUST_SIGMA_SCALE = 1.4826
 THREE_SIGMA_MULTIPLIER = 3.0
 RAD_TO_DEG = 180.0 / pi

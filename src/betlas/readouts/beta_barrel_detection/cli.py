@@ -9,7 +9,7 @@ from hydra.errors import HydraException
 from omegaconf.errors import OmegaConfBaseException
 
 if __package__ in {None, ""}:  # pragma: no cover - path execution convenience
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from betlas.readouts.beta_barrel_detection.bootstrap import configure_thread_environment
     from betlas.readouts.beta_barrel_detection.config import build_config
     from betlas.readouts.beta_barrel_detection.exceptions import BetlasBetaError

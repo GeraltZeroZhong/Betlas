@@ -8,7 +8,6 @@ from typing import Any
 import pandas as pd
 
 BETLAS_PREFIX = "betlas_"
-_COMPATIBILITY_PREFIX = "cz_"
 
 
 class SchemaCompatibilityWarning(UserWarning):
@@ -19,17 +18,11 @@ def is_betlas_column(name: str) -> bool:
     return str(name).startswith(BETLAS_PREFIX)
 
 
-def _is_compatibility_column(name: str) -> bool:
-    return str(name).startswith(_COMPATIBILITY_PREFIX)
-
-
-def canonical_feature_name(name: str) -> str:
-    """Return the canonical Betlas feature name for a supported input name."""
+def canonical_feature_name(name: str, *, aliases: Mapping[str, str] | None = None) -> str:
+    """Resolve an explicitly supplied column alias, preserving other names."""
 
     text = str(name)
-    if text.startswith(_COMPATIBILITY_PREFIX):
-        return f"{BETLAS_PREFIX}{text[len(_COMPATIBILITY_PREFIX):]}"
-    return text
+    return (aliases or {}).get(text, text)
 
 
 def _is_missing_scalar(value: Any) -> bool:
@@ -74,14 +67,17 @@ def _series_conflict_mask(left: pd.Series, right: pd.Series) -> pd.Series:
 def normalize_feature_mapping(
     values: Mapping[str, Any],
     *,
+    aliases: Mapping[str, str] | None = None,
     strict: bool = False,
     keep_compatibility_columns: bool = False,
 ) -> dict[str, Any]:
-    """Return a copy with supported input feature keys mapped to Betlas names."""
+    """Return a copy with explicit input aliases mapped to canonical names."""
 
     normalized = dict(values)
-    for source_key in [key for key in values if _is_compatibility_column(str(key))]:
-        betlas_key = canonical_feature_name(str(source_key))
+    for source_key in [key for key in values if str(key) in (aliases or {})]:
+        betlas_key = canonical_feature_name(str(source_key), aliases=aliases)
+        if betlas_key == source_key:
+            continue
         if betlas_key in normalized:
             if _scalars_conflict(normalized[betlas_key], values[source_key]):
                 message = (
@@ -104,14 +100,17 @@ def normalize_feature_mapping(
 def normalize_feature_columns(
     frame: pd.DataFrame,
     *,
+    aliases: Mapping[str, str] | None = None,
     strict: bool = False,
     keep_compatibility_columns: bool = False,
 ) -> pd.DataFrame:
-    """Return a copy with supported input feature columns mapped to Betlas names."""
+    """Return a copy with explicit input aliases mapped to canonical names."""
 
     normalized = frame.copy()
-    for source_column in [column for column in frame.columns if _is_compatibility_column(str(column))]:
-        betlas_column = canonical_feature_name(str(source_column))
+    for source_column in [column for column in frame.columns if str(column) in (aliases or {})]:
+        betlas_column = canonical_feature_name(str(source_column), aliases=aliases)
+        if betlas_column == source_column:
+            continue
         if betlas_column in normalized.columns:
             conflicts = _series_conflict_mask(normalized[betlas_column], normalized[source_column])
             conflict_count = int(conflicts.sum())

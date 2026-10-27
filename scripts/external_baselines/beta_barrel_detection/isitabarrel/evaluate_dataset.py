@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
 from scripts.external_baselines.beta_barrel_detection.isitabarrel.contact_maps import (
     DEFAULT_CA_CUTOFF,
@@ -248,7 +248,7 @@ def _metrics(rows: Sequence[dict[str, object]], *, file_level: bool) -> dict[str
     precision = tp / (tp + fp) if tp + fp else math.nan
     specificity = tn / (tn + fp) if tn + fp else math.nan
     accuracy = (tp + tn) / (tp + fp + tn + fn) if tp + fp + tn + fn else math.nan
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else math.nan
+    f1 = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else math.nan
     balanced_accuracy = (
         (recall + specificity) / 2
         if not math.isnan(recall) and not math.isnan(specificity)
