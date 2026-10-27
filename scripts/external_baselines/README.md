@@ -1,59 +1,60 @@
-# External Baseline Wrappers
+# External methods
 
-This directory contains wrappers for running external baseline methods against
-Betlas readout inputs. The wrappers do not vendor upstream tools, model weights
-or databases. They provide command-line adapters, input normalization, output
-parsing and denominator-aligned summaries while keeping third-party runtime
-requirements outside the core package.
+These source-checkout adapters expose external methods used alongside Betlas.
+They accept caller-supplied inputs, local tool installations, and output paths.
+Install Betlas for shared Python dependencies, then follow the method-specific
+instructions for the external program and its models.
 
-## Scope
+| Function | Methods | Guide |
+| --- | --- | --- |
+| Beta-barrel detection | Cooper-Beta, Foldseek/TMalign, IsItABarrel, PRED-TMBB2 through JUCHMME | [Detection](beta_barrel_detection/README.md) |
+| Specialist binary tasks | Shared labelled-reference Foldseek and native method evaluation | [Task guide](SPECIALIST_TASKS.md) |
+| Beta-barrel strand counts | BETAWARE, PRED-TMBB2 HMM and HNN, PROFtmb, TMbed, PolarBearal3 | [Strand counts](beta_barrel_staves/README.md) |
+| Protein embeddings | ESM-C 600M | [Embeddings](embeddings/README.md) |
+| Protein sequence search | NCBI BLASTp, MMseqs2 | [Sequence search](sequence_search/README.md) |
+| Solenoid detection | RAPHAEL output import, SOLeNNoID | [Solenoids](solenoid/README.md) |
+| Sequence-based beta pairing and contacts | BetaPro, BCov, bbcontacts native adapters | [Beta topology](beta_topology/README.md) |
 
-- `beta_barrel_detection/`: adapters for whole-chain beta-barrel detection
-  baselines.
-- `beta_barrel_staves/stave_count_wrappers/`: wrappers for beta-barrel
-  transmembrane-strand or stave-count baselines.
+The guides describe executable dependencies, output schemas, parsing rules, and
+upstream attribution. ProtT5 is a TMbed dependency; its inference is managed by
+that upstream program. Install each upstream implementation and obtain its weights
+under the applicable license and citation terms.
 
-Large downloaded databases, tool checkouts, temporary work directories and run
-outputs are intentionally excluded from the source tree. Install each upstream
-method under the license and citation requirements of that project, then pass
-its executable or checkout path to the corresponding wrapper.
+Specialist outputs have different endpoints and information requirements. Follow
+the [comparison contracts](../../src/betlas/benchmarks/SPECIALISTS.md) before
+evaluating solenoid scores, strand partners or residue contacts. Check that the
+required upstream runtime, MSA pipeline or web service is available. Select methods
+whose endpoints and information requirements fit the planned CATH comparison.
 
-Run Python adapters from the repository root with both the root and `src/` on
-`PYTHONPATH`:
+Run Python entry points from the checkout root, for example:
 
 ```bash
-PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/foldseek/structure_search.py --help
-PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/isitabarrel/structure_map.py --help
-PYTHONPATH=.:src python scripts/external_baselines/beta_barrel_detection/pred_tmbb2/structure_sequence.py --help
+python -m scripts.external_baselines.beta_barrel_detection.foldseek.runner --help
+python -m scripts.external_baselines.embeddings.esmc --help
+python -m scripts.external_baselines.sequence_search --help
+bash scripts/external_baselines/beta_barrel_staves/run_tmbed.sh --help
 ```
 
-Shell wrappers under `beta_barrel_staves/stave_count_wrappers/scripts/` can be
-run directly with `bash ... --help`.
+The [strand-count example](beta_barrel_staves/README.md#synthetic-parsing-example)
+demonstrates an end-to-end conversion with invented sequence labels. The
+independently constructed [mini structure](../../examples/mini.cif) supports input
+preparation tests. Detection guides also show how to supply positive and negative
+directories for a caller-defined evaluation.
 
-## External Methods
+Place inputs under `inputs/` and generated files under `outputs/`, or select
+directories outside the checkout. Run one job per output directory when a method
+uses fixed sidecar names. The source distribution includes these scripts; the
+Python wheel installs the core `betlas` package.
 
-| Method | Role in Betlas analyses | Upstream source |
-| --- | --- | --- |
-| Foldseek | Structure-search baseline for beta-barrel detection and external structural context | <https://github.com/steineggerlab/foldseek> |
-| IsItABarrel | Structure/contact-map beta-barrel detection baseline | <https://github.com/SluskyLab/isitabarrel> |
-| PRED-TMBB2 / JUCHMME | Sequence-based transmembrane beta-barrel topology baseline | <https://github.com/pbagos/juchmme> |
-| BetAware | Transmembrane beta-barrel detection/topology baseline | <https://github.com/BolognaBiocomp/betaware> |
-| TMbed | Transmembrane-protein prediction baseline used for aligned stave-count comparisons | <https://github.com/BernhoferM/TMbed> |
-| PROFtmb | Profile-HMM transmembrane beta-barrel baseline | <https://packages.debian.org/bullseye/proftmb> |
-| PolarBearal3 | Beta-barrel strand-count baseline wrapper | <https://github.com/SluskyLab/PolarBearal3> |
+## Verification and contributions
 
-## Reproducibility Contract
+```bash
+python -m pytest tests/test_external_detection.py tests/test_external_staves.py \
+  tests/test_external_embeddings.py tests/test_external_sequence_search.py
+```
 
-The wrappers preserve three boundaries.
-
-1. External tools are not used to define Betlas labels, features or trained
-   readouts.
-2. Missing external predictions are retained as missing or denominator-specific
-   outcomes rather than silently dropped.
-3. Wrapper outputs are post hoc comparison tables. They are not portable
-   replacements for the upstream software, and they do not modify Betlas run
-   artifacts.
-
-When adding a new external baseline, include a method-specific README with the
-upstream URL, version or commit policy, expected input files, generated output
-schema and any license constraints that affect redistribution.
+Synthetic parser tests, analytical expectations, and temporary fake executables
+check preparation, argument passing, failure propagation, and output alignment.
+Model inference and biological accuracy require the separately installed methods
+and suitable inputs. Add adapters by function, preserve explicit paths, and include
+tests that run with synthetic inputs and locally constructed command substitutes.

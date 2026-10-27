@@ -104,41 +104,7 @@ def _feature_spec_family_by_name() -> dict[str, str]:
 
 
 def feature_group_for(column: str) -> str:
-    spec_family = _feature_spec_family_by_name().get(column)
-    if spec_family:
-        return spec_family
-    if column.startswith(("betlas_beta_run_", "betlas_beta_segment_to_run_")):
-        return "beta_run_topology"
-    if column.startswith("betlas_sheet_pair_"):
-        return "sheet_pair_packing"
-    if column.startswith(("betlas_sheet_seq_", "betlas_sheet_order_", "betlas_top2_sheet_order_", "betlas_jelly_roll_order_")):
-        return "sheet_sequence_topology"
-    if column.startswith("betlas_contact"):
-        return "contact_graph"
-    if column.startswith(
-        (
-            "betlas_angular_fft_k1",
-            "betlas_angular_fft_k2",
-            "betlas_angular_sector_",
-            "betlas_sandwich_lobe_guard",
-        )
-    ):
-        return "angular_lobes"
-    if column.startswith(("betlas_axis_periodicity", "betlas_angular_fft_k3_8", "betlas_angular_fft_k")):
-        return "axis_periodicity"
-    if column.startswith(("betlas_axis_best_", "betlas_z_continuity", "betlas_angular_gap", "betlas_barrel_wall_")):
-        return "axis_closure"
-    if column.startswith(("betlas_sheet_", "betlas_largest_sheet", "betlas_parallel_sheet", "betlas_antiparallel_sheet")):
-        return "sheet_global"
-    if column.startswith(("betlas_strand_order_", "betlas_strand_direction_", "betlas_strand_ntc_", "betlas_strand_axis_")):
-        return "strand_order"
-    if column.startswith(("betlas_alpha_shell_", "betlas_helix_beta_", "betlas_beta_alpha_")):
-        return "alpha_shell"
-    if column.startswith(("betlas_helix_", "betlas_residue_", "betlas_beta_residue", "betlas_beta_strand", "betlas_strand_length", "betlas_sse_count")):
-        return "composition"
-    if column.startswith(("betlas_pca_",)):
-        return "global_shape"
-    return "misc"
+    return _feature_spec_family_by_name().get(column, "misc")
 
 
 def build_feature_groups(feature_cols: list[str]) -> dict[str, list[str]]:

@@ -15,5 +15,8 @@ dependencies:
   - dssp
   - xgboost
   - catboost
+  - gemmi
+  - networkx
+  - matplotlib
   - pytest
   - ruff

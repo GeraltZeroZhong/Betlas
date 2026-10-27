@@ -1,1 +1,1 @@
-"""Local analysis and figure-generation scripts."""
+"""Source-checkout command-line workflows and external-tool adapters."""

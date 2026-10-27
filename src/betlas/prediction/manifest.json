@@ -1,0 +1,20 @@
+{
+  "release": "v1.1.0",
+  "checkpoints": {
+    "solenoid": {
+      "filename": "betlas-solenoid-v1.1.0.json",
+      "byte_size": 20013,
+      "sha256": "5efe0001a82fe14e2dc6a6f55bb465e0a289bf56d3b96d903ca3e251aefc3aa8"
+    },
+    "barrel": {
+      "filename": "betlas-barrel-v1.1.0.json",
+      "byte_size": 19951,
+      "sha256": "c001f608b27ba6357a53ea64f34160f8f6521b06b8ee126f801b4399e69e2642"
+    },
+    "barrel-strands": {
+      "filename": "betlas-barrel-strands-v1.1.0.json",
+      "byte_size": 6499087,
+      "sha256": "f50e9ae444653bcd7c05ea8f4ea4b28f724dff4220700b37375bded191da99b3"
+    }
+  }
+}

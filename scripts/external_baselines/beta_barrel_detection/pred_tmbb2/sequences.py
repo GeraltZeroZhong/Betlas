@@ -14,10 +14,65 @@ from pathlib import Path
 
 from Bio.Data.PDBData import protein_letters_3to1_extended
 from Bio.PDB import MMCIFParser, PDBParser
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from Bio.PDB.Polypeptide import is_aa
 
 DEFAULT_MIN_RESIDUES = 15
 SUPPORTED_EXTENSIONS = {".pdb", ".ent", ".cif", ".mmcif"}
+
+
+def declared_polymer_sequence(structure_path: str | Path, *, chain_id: str) -> dict:
+    """Read the declared polymer sequence, including unobserved positions.
+
+    No observed-coordinate fallback is made. An absent declaration or ambiguous
+    author-chain mapping requires an explicit sequence supplied by the caller.
+    """
+    path = Path(structure_path).resolve()
+    if path.suffix.lower() in {".cif", ".mmcif"}:
+        data = MMCIF2Dict(str(path))
+        chains = data.get("_atom_site.auth_asym_id", [])
+        entities = data.get("_atom_site.label_entity_id", [])
+        polymer_entities = set(data.get("_entity_poly.entity_id", []))
+        selected = {entity for chain, entity in zip(chains, entities, strict=True)
+                    if chain == chain_id and entity in polymer_entities}
+        if len(selected) != 1:
+            raise ValueError("Author chain does not map to one declared polymer entity")
+        entity = selected.pop()
+        ids = data.get("_entity_poly.entity_id", [])
+        sequences = data.get("_entity_poly.pdbx_seq_one_letter_code_can")
+        if sequences is not None:
+            matches = [seq for candidate, seq in zip(ids, sequences, strict=True) if candidate == entity]
+            if len(matches) != 1:
+                raise ValueError("Canonical declared polymer sequence is absent or ambiguous")
+            sequence = "".join(matches[0].split()).upper()
+            source = "mmcif_entity_poly_canonical"
+        else:
+            positions = [(int(number), monomer) for candidate, number, monomer in zip(
+                data.get("_entity_poly_seq.entity_id", []), data.get("_entity_poly_seq.num", []),
+                data.get("_entity_poly_seq.mon_id", []), strict=True) if candidate == entity]
+            positions.sort()
+            if not positions or [n for n, _ in positions] != list(range(1, len(positions) + 1)):
+                raise ValueError("Declared polymer sequence is absent, discontinuous or ambiguous")
+            sequence = "".join(protein_letters_3to1_extended.get(name.upper(), "X")
+                               for _, name in positions)
+            source = "mmcif_entity_poly_seq"
+    elif path.suffix.lower() in {".pdb", ".ent"}:
+        records = [line for line in path.read_text().splitlines()
+                   if line.startswith("SEQRES") and line[11:12] == chain_id]
+        if not records:
+            raise ValueError("PDB SEQRES is absent for the selected author chain")
+        sequence = "".join(protein_letters_3to1_extended.get(name, "X")
+                           for line in records for name in line[19:70].split())
+        expected = {int(line[13:17]) for line in records}
+        if expected != {len(sequence)}:
+            raise ValueError("PDB SEQRES length does not match the declared polymer length")
+        source = "pdb_seqres"
+    else:
+        raise ValueError("Declared-sequence extraction requires uncompressed PDB or mmCIF")
+    if not sequence or not sequence.isalpha():
+        raise ValueError("Declared canonical sequence contains unsupported symbols")
+    return {"sequence": sequence, "sequence_source": source, "source_path": str(path),
+            "author_chain_id": chain_id, "length": len(sequence)}
 
 
 @dataclass(frozen=True)

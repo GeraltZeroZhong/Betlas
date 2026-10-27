@@ -1,0 +1,8 @@
+/.internal export-ignore
+/.agents export-ignore
+/.codex export-ignore
+/.aws export-ignore
+/.venv export-ignore
+/.cache export-ignore
+/.pytest_cache export-ignore
+/.ruff_cache export-ignore

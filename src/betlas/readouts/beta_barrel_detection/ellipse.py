@@ -63,10 +63,8 @@ def _closest_parameter(point_x: float, point_y: float, axis_a: float, axis_b: fl
     """
     Return the ellipse parameter of the closest point to ``(point_x, point_y)``.
 
-    We use several Newton starts around the scaled polar angle and keep the best
-    converged solution. This is fast for the small slice sizes in this project
-    while remaining much closer to the physical orthogonal distance than an
-    algebraic residual.
+    Use several Newton starts around the scaled polar angle and select the
+    candidate with the smallest squared point-to-ellipse distance.
     """
     if (abs(point_x) < _EPS) and (abs(point_y) < _EPS):
         return 0.5 * pi
@@ -136,9 +134,8 @@ def _trim_points_for_direct_fit(points_xy: np.ndarray) -> np.ndarray:
     """
     Keep a robust core before the direct fit.
 
-    `fitEllipseDirect()` is much faster than iterative geometric fitting, but it
-    is also more sensitive to obvious outliers. We therefore keep the lightweight
-    radial trimming that previously fed the nonlinear initializer.
+    Trim radial outliers using a median absolute deviation band before calling
+    `fitEllipseDirect()`. Retain all points if fewer than five survive trimming.
     """
     pts = np.asarray(points_xy, dtype=float)
     median_center = np.median(pts, axis=0)
@@ -196,10 +193,8 @@ def fit_rotated_ellipse(
     """
     Fit a rotated ellipse using `cv2.fitEllipseDirect()`.
 
-    OpenCV's direct least-squares fit is non-iterative and much faster than the
-    previous nonlinear geometric solver. We still compute the downstream
-    geometric diagnostics once on the final ellipse so the rest of the analyzer
-    can keep using RMSE/inlier-based thresholds unchanged.
+    Compute geometric residuals against the fitted ellipse for RMSE and
+    inlier-based diagnostics.
     """
     pts = np.asarray(points_xy, dtype=float)
     if pts.ndim != 2 or pts.shape[1] != 2:

@@ -1,0 +1,46 @@
+[
+  {
+    "method": "BETAWARE",
+    "source": "https://github.com/BolognaBiocomp/betaware",
+    "source_ref": "c2797d595798c2febd30bacbde73222a01c4119b",
+    "wrapper": "run_betaware.sh",
+    "parser_method": "betaware"
+  },
+  {
+    "method": "PRED-TMBB2 HMM",
+    "source": "https://github.com/pbagos/juchmme/releases/tag/1.0.6",
+    "version": "JUCHMME release 1.0.6",
+    "wrapper": "run_juchmme_pred_tmbb2.sh hmm",
+    "parser_method": "pred-tmbb2-hmm"
+  },
+  {
+    "method": "PRED-TMBB2 HNN",
+    "source": "https://github.com/pbagos/juchmme/releases/tag/1.0.6",
+    "version": "JUCHMME release 1.0.6; conf.tmbbHNN and W_PREDTMBB2_MYMODEL",
+    "wrapper": "run_juchmme_pred_tmbb2.sh hnn",
+    "parser_method": "pred-tmbb2-hnn"
+  },
+  {
+    "method": "PROFtmb",
+    "source": "https://packages.debian.org/bullseye/proftmb",
+    "version": "1.1.12-11",
+    "wrapper": "run_proftmb.sh",
+    "parser_method": "proftmb"
+  },
+  {
+    "method": "TMbed",
+    "source": "https://github.com/BernhoferM/TMbed",
+    "source_ref": "8cee893523eb655bc9485c00c65336d27a236191",
+    "runtime_reference": "transformers 4.51.3, CPU PyTorch",
+    "wrapper": "run_tmbed.sh",
+    "parser_method": "tmbed"
+  },
+  {
+    "method": "PolarBearal3",
+    "source": "https://github.com/SluskyLab/PolarBearal3",
+    "source_ref": "e8476c3d8bed6c07bb0f0b7e604be183eafe3a15",
+    "runtime_reference": ".NET SDK 6, MathNet.Numerics 5.0.0",
+    "wrapper": "run_polarbearal.sh",
+    "parser_method": "polarbearal3"
+  }
+]

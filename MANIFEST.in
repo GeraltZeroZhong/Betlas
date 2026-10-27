@@ -1,19 +1,13 @@
 include README.md
+include CHANGELOG.md
+recursive-include docs *.md
 include LICENSE
 include pyproject.toml
-
-prune assets
-prune configs
-prune data
-prune dist
-prune docs
-prune examples
-prune figures
-prune manuscript
-prune reproducibility
-prune runs
-prune scripts
-prune tests
-
-global-exclude __pycache__/*
+include environment.yml
+recursive-include examples *.md *.cif
+recursive-include tests *.py
+recursive-include scripts *.py *.sh *.md *.json *.cs *.csproj
+graft src/betlas
+prune .internal
+global-exclude __pycache__
 global-exclude *.py[cod]

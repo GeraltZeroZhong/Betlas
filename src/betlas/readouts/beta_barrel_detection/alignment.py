@@ -41,9 +41,6 @@ class PCAAligner:
         self.eigenvalues = eig_vals
         self.rotation_matrix = eig_vecs
         
-        # Debug helper: variance contribution of each PCA axis.
-        # variance_ratio = eig_vals / np.sum(eig_vals)
-        # print(f"PCA Variance Ratios (X, Y, Z): {variance_ratio}")
 
     def transform(self, points):
         """

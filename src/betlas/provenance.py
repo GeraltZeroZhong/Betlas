@@ -28,11 +28,19 @@ def package_version(distribution_name: str) -> str:
 
 
 def source_repo_root(start: Path | None = None) -> Path | None:
-    base = (start or Path.cwd()).resolve()
+    if start is None:
+        source = Path(__file__).resolve().parents[1]
+        if source.name != "src":
+            return None
+        root = source.parent
+        return root if (root / ".git").exists() else None
+    base = start.resolve()
     candidates = [base, *base.parents]
     for candidate in candidates:
         if (candidate / ".git").exists():
             return candidate
+        if (candidate / "pyproject.toml").is_file() or candidate.name in {"site-packages", "dist-packages"}:
+            return None
     return None
 
 
@@ -132,10 +140,8 @@ def source_tree_state(
     paths: Iterable[str | Path] = (
         "src",
         "scripts",
-        "configs",
-        "docs",
         "tests",
-        "external_baselines",
+        "examples",
         "pyproject.toml",
         "environment.yml",
         "LICENSE",
@@ -161,8 +167,7 @@ def source_tree_state(
         files = [repo_root / rel_path for rel_path in tracked.splitlines() if rel_path.strip()]
         basis = "git_ls_files"
     else:
-        excluded_parts = {"__pycache__", ".pytest_cache", ".ruff_cache", "".join(("inter", "nal"))}
-        excluded_prefixes = ("scripts/" + "".join(("arc", "hive")),)
+        excluded_parts = {"__pycache__", ".pytest_cache", ".ruff_cache"}
         for item in paths:
             path = Path(item)
             if not path.exists():
@@ -175,7 +180,6 @@ def source_tree_state(
                 for child in sorted(path.rglob("*"))
                 if child.is_file()
                 and not any(part in excluded_parts for part in child.parts)
-                and not any(str(child).startswith(prefix) for prefix in excluded_prefixes)
             )
 
     digest = hashlib.sha256()

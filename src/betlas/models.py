@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any
 
 _COMPAT_BENCHMARK_FLAG = "allowed_for_" + "pub" + "lication_benchmark"
@@ -36,6 +36,7 @@ class SecondaryStructureElement:
     sheet_id: str = ""
     sheet_range_id: str = ""
     sense_to_previous: str = ""
+    fragment_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -129,6 +130,11 @@ class StructureGeometry:
     helices: tuple[SecondaryStructureElement, ...]
     sheet_patches: tuple[SheetPatch, ...]
     warnings: tuple[str, ...] = ()
+    sheet_connections: tuple[tuple[str, str, str], ...] = ()
+    secondary_structure_source: str = "deposited"
+    domain_segment_count: int = 0
+    requested_residue_count: int = 0
+    missing_boundary_ca_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -138,6 +144,11 @@ class StructureGeometry:
             "helices": [helix.to_dict() for helix in self.helices],
             "sheet_patches": [sheet.to_dict() for sheet in self.sheet_patches],
             "warnings": list(self.warnings),
+            "sheet_connections": [list(edge) for edge in self.sheet_connections],
+            "secondary_structure_source": self.secondary_structure_source,
+            "domain_segment_count": self.domain_segment_count,
+            "requested_residue_count": self.requested_residue_count,
+            "missing_boundary_ca_count": self.missing_boundary_ca_count,
         }
 
 
@@ -145,13 +156,10 @@ class StructureGeometry:
 class GeometrySignature:
     domain: DomainCandidate
     features: dict[str, float | int | str]
-    fold_scores: dict[str, float] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
 
     def to_row(self) -> dict[str, Any]:
         row = self.domain.to_dict()
         row.update(self.features)
-        for label, score in self.fold_scores.items():
-            row[f"betlas_rule_score_{label}"] = float(score)
         row["betlas_warnings"] = ";".join(self.warnings)
         return row

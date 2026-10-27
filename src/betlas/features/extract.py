@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -8,10 +7,9 @@ from typing import Any
 
 import numpy as np
 
-from ..constants import DIAGNOSTIC_PREFIX, FOLD_LABELS
+from ..constants import DIAGNOSTIC_PREFIX
 from ..io.mmcif import available_auth_chain_ids, build_structure_geometry, is_mmcif_path
 from ..models import DomainCandidate, GeometrySignature, StructureGeometry
-from ..schema import _is_compatibility_column
 from ..slicing import SliceConfig, _compute_axis_slice_summary
 from .geometry import (
     EPS,
@@ -25,7 +23,10 @@ from .geometry import (
     project_to_axis,
     stable_axis,
 )
-from .rules import grammar_rule_scores
+from .current import (
+    FEATURE_COLUMNS, FEATURE_SCHEMA, CIRCULAR_MOMENT_COLUMNS, VALID_PLANE_COLUMNS,
+    apply_applicability, circular_moments,
+)
 
 
 def _nan_to_zero(value: float) -> float:
@@ -80,25 +81,40 @@ def _interval_overlap(a_start: int, a_stop: int, b_start: int, b_stop: int) -> i
     return max(0, min(a_stop, b_stop) - max(a_start, b_start) + 1)
 
 
+def _element_sequence_key(geometry: StructureGeometry, element: Any) -> tuple[str, int]:
+    if geometry.secondary_structure_source == "dssp":
+        first = geometry.residues[element.residue_indices[0]]
+        return first.chain_id, int(first.label_seq_id)
+    return element.chain_id, int(element.start_auth_seq_id)
+
+
 def _beta_runs(geometry: StructureGeometry, *, max_gap: int = 2) -> list[dict[str, Any]]:
     """Merge overlapping/split SHEET ranges into sequence-level beta runs."""
     intervals: list[dict[str, Any]] = []
     for index, segment in enumerate(geometry.beta_segments):
-        start = min(segment.start_auth_seq_id, segment.end_auth_seq_id)
-        stop = max(segment.start_auth_seq_id, segment.end_auth_seq_id)
+        if geometry.secondary_structure_source == "dssp":
+            start = int(geometry.residues[segment.residue_indices[0]].label_seq_id)
+            stop = int(geometry.residues[segment.residue_indices[-1]].label_seq_id)
+        else:
+            start = min(segment.start_auth_seq_id, segment.end_auth_seq_id)
+            stop = max(segment.start_auth_seq_id, segment.end_auth_seq_id)
         intervals.append(
             {
                 "start": start,
                 "stop": stop,
                 "segment_indices": [index],
                 "sheet_ids": [segment.sheet_id or "unknown"],
+                "chain_id": segment.chain_id,
+                "fragment_id": segment.fragment_id,
             }
         )
-    intervals.sort(key=lambda item: (int(item["start"]), int(item["stop"])))
+    intervals.sort(key=lambda item: (item["chain_id"], int(item["start"]), int(item["stop"])))
 
     runs: list[dict[str, Any]] = []
     for interval in intervals:
-        if not runs or int(interval["start"]) > int(runs[-1]["stop"]) + max_gap + 1:
+        if (not runs or interval["chain_id"] != runs[-1]["chain_id"]
+                or interval["fragment_id"] != runs[-1]["fragment_id"]
+                or int(interval["start"]) > int(runs[-1]["stop"]) + max_gap + 1):
             runs.append(dict(interval))
             continue
         runs[-1]["stop"] = max(int(runs[-1]["stop"]), int(interval["stop"]))
@@ -116,10 +132,10 @@ def _beta_runs(geometry: StructureGeometry, *, max_gap: int = 2) -> list[dict[st
 
 def _sequence_features(geometry: StructureGeometry) -> dict[str, float]:
     elements = [
-        (segment.start_auth_seq_id, "B", segment.element_id)
+        (_element_sequence_key(geometry, segment), "B", segment.element_id, segment.fragment_id)
         for segment in geometry.beta_segments
     ] + [
-        (helix.start_auth_seq_id, "H", helix.element_id)
+        (_element_sequence_key(geometry, helix), "H", helix.element_id, helix.fragment_id)
         for helix in geometry.helices
     ]
     elements.sort()
@@ -131,13 +147,17 @@ def _sequence_features(geometry: StructureGeometry) -> dict[str, float]:
         }
     transitions = 0
     repeat_pairs = 0
+    valid_pairs = 0
     for left, right in zip(elements, elements[1:], strict=False):
+        if left[0][0] != right[0][0] or left[3] != right[3]:
+            continue
+        valid_pairs += 1
         if left[1] != right[1] and {left[1], right[1]} == {"B", "H"}:
             transitions += 1
         if left[1] == "B" and right[1] == "H":
             repeat_pairs += 1
     return {
-        "betlas_beta_alpha_alternation_fraction": transitions / max(1, len(elements) - 1),
+        "betlas_beta_alpha_alternation_fraction": transitions / max(1, valid_pairs),
         "betlas_beta_alpha_repeat_pairs": float(repeat_pairs),
         "betlas_sse_count": float(len(elements)),
     }
@@ -263,15 +283,15 @@ def _sheet_pair_packing_features(
         "betlas_sheet_pair_centroid_distance": 0.0,
         "betlas_sheet_pair_centroid_distance_norm": 0.0,
         "betlas_sheet_pair_angular_separation_fraction": 0.0,
-        "betlas_sheet_pair_normal_abs_dot": 0.0,
-        "betlas_sheet_pair_face_alignment": 0.0,
+        "betlas_sheet_pair_valid_normal_abs_dot": 0.0,
+        "betlas_sheet_pair_valid_face_alignment": 0.0,
         "betlas_sheet_pair_cross_min_distance": 0.0,
         "betlas_sheet_pair_cross_distance_mean": 0.0,
         "betlas_sheet_pair_cross_contact_density8": 0.0,
         "betlas_sheet_pair_cross_contact_density10": 0.0,
         "betlas_sheet_pair_reciprocal_nearest_fraction8": 0.0,
-        "betlas_sheet_pair_bilayer_score": 0.0,
-        "betlas_sheet_pair_lobe_score": 0.0,
+        "betlas_sheet_pair_valid_bilayer_score": 0.0,
+        "betlas_sheet_pair_valid_lobe_score": 0.0,
     }
     if len(ranked) < 2 or total_segments == 0:
         return empty
@@ -332,15 +352,15 @@ def _sheet_pair_packing_features(
         "betlas_sheet_pair_centroid_distance": center_distance,
         "betlas_sheet_pair_centroid_distance_norm": _safe_ratio(center_distance, radial_scale + 1.0),
         "betlas_sheet_pair_angular_separation_fraction": float(angular_sep),
-        "betlas_sheet_pair_normal_abs_dot": float(normal_abs_dot),
-        "betlas_sheet_pair_face_alignment": float(face_alignment),
+        "betlas_sheet_pair_valid_normal_abs_dot": float(normal_abs_dot),
+        "betlas_sheet_pair_valid_face_alignment": float(face_alignment),
         "betlas_sheet_pair_cross_min_distance": float(np.min(pair_arr)) if len(pair_arr) else 0.0,
         "betlas_sheet_pair_cross_distance_mean": float(np.mean(pair_arr)) if len(pair_arr) else 0.0,
         "betlas_sheet_pair_cross_contact_density8": float(np.mean(pair_arr <= 8.0)) if len(pair_arr) else 0.0,
         "betlas_sheet_pair_cross_contact_density10": float(np.mean(pair_arr <= 10.0)) if len(pair_arr) else 0.0,
         "betlas_sheet_pair_reciprocal_nearest_fraction8": float(np.mean(nearest <= 8.0)) if len(nearest) else 0.0,
-        "betlas_sheet_pair_bilayer_score": float(bilayer_score),
-        "betlas_sheet_pair_lobe_score": float(lobe_score),
+        "betlas_sheet_pair_valid_bilayer_score": float(bilayer_score),
+        "betlas_sheet_pair_valid_lobe_score": float(lobe_score),
         "betlas_sheet_pair_top_sheet_ids_equal": 1.0 if sheet_a == sheet_b else 0.0,
     }
 
@@ -469,7 +489,7 @@ def _sheet_order_topology_features(geometry: StructureGeometry) -> dict[str, flo
             "betlas_jelly_roll_order_nonlocal_score": 0.0,
         }
 
-    seq_order = sorted(range(len(segments)), key=lambda idx: segments[idx].start_auth_seq_id)
+    seq_order = sorted(range(len(segments)), key=lambda idx: _element_sequence_key(geometry, segments[idx]))
     seq_rank = {idx: rank for rank, idx in enumerate(seq_order)}
     by_sheet: dict[str, list[int]] = defaultdict(list)
     for idx, segment in enumerate(segments):
@@ -599,13 +619,15 @@ def _contact_sequence_topology_features(geometry: StructureGeometry) -> dict[str
             "betlas_contact10_seq_gap_mean": 0.0,
             "betlas_contact10_nonlocal_fraction": 0.0,
         }
-    seq_order = sorted(range(n), key=lambda idx: beta_geoms[idx].element.start_auth_seq_id)
+    seq_order = sorted(range(n), key=lambda idx: _element_sequence_key(geometry, beta_geoms[idx].element))
     seq_rank = {idx: rank for rank, idx in enumerate(seq_order)}
     gaps8: list[float] = []
     gaps10: list[float] = []
     cross_nonlocal8: list[float] = []
     for i in range(n):
         for j in range(i + 1, n):
+            if beta_geoms[i].element.chain_id != beta_geoms[j].element.chain_id:
+                continue
             distance = _min_pair_distance(beta_geoms[i].coords, beta_geoms[j].coords)
             gap = float(abs(seq_rank[i] - seq_rank[j]))
             if distance <= 10.0:
@@ -623,53 +645,6 @@ def _contact_sequence_topology_features(geometry: StructureGeometry) -> dict[str
         else 0.0,
         "betlas_contact10_seq_gap_mean": float(np.mean(gaps10)) if gaps10 else 0.0,
         "betlas_contact10_nonlocal_fraction": float(np.mean(np.asarray(gaps10) > 2.0)) if gaps10 else 0.0,
-    }
-
-
-def _angular_lobe_features(
-    segment_midpoints: np.ndarray,
-    origin: np.ndarray,
-    axis: np.ndarray,
-    base_features: dict[str, float | int | str],
-) -> dict[str, float]:
-    if len(segment_midpoints) < 3:
-        return {
-            "betlas_angular_fft_k1": 0.0,
-            "betlas_angular_fft_k2": 0.0,
-            "betlas_angular_fft_k2_dominance": 0.0,
-            "betlas_angular_sector_occupancy12": 0.0,
-            "betlas_angular_sector_entropy12": 0.0,
-            "betlas_barrel_wall_continuity_score": 0.0,
-            "betlas_sandwich_lobe_guard_score": 0.0,
-        }
-    xy, _z, _xyz = project_to_axis(segment_midpoints, origin, axis)
-    angles = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * math.pi)
-    hist, _edges = np.histogram(angles, bins=36, range=(0.0, 2.0 * math.pi))
-    hist = hist.astype(float)
-    hist = (hist - np.mean(hist)) / (np.std(hist) + EPS)
-    fft = np.abs(np.fft.rfft(hist))
-    fft_norm = fft / (np.sum(fft[1:]) + EPS)
-    sectors, _sector_edges = np.histogram(angles, bins=12, range=(0.0, 2.0 * math.pi))
-    occupied = float(np.mean(sectors > 0))
-    sector_entropy = entropy(np.repeat(np.arange(12), sectors)) if int(np.sum(sectors)) else 0.0
-    k1 = float(fft_norm[1]) if len(fft_norm) > 1 else 0.0
-    k2 = float(fft_norm[2]) if len(fft_norm) > 2 else 0.0
-    kmax = max(k1, k2, float(base_features.get("betlas_angular_fft_k3_8_max", 0.0)))
-    closure = float(base_features.get("betlas_axis_best_slice_coverage_median", 0.0))
-    continuity = float(base_features.get("betlas_z_continuity_fraction", 0.0))
-    largest_sheet = float(base_features.get("betlas_largest_sheet_fraction", 0.0))
-    bilayer = float(base_features.get("betlas_sheet_pair_bilayer_score", 0.0))
-    lobe = float(base_features.get("betlas_sheet_pair_lobe_score", 0.0))
-    barrel_wall = closure * continuity * largest_sheet * (1.0 - min(1.0, k2 / (kmax + EPS)))
-    sandwich_guard = k2 * bilayer + 0.5 * lobe
-    return {
-        "betlas_angular_fft_k1": k1,
-        "betlas_angular_fft_k2": k2,
-        "betlas_angular_fft_k2_dominance": k2 / (kmax + EPS),
-        "betlas_angular_sector_occupancy12": occupied,
-        "betlas_angular_sector_entropy12": float(sector_entropy),
-        "betlas_barrel_wall_continuity_score": float(barrel_wall),
-        "betlas_sandwich_lobe_guard_score": float(sandwich_guard),
     }
 
 
@@ -691,54 +666,6 @@ def _axis_slice_features(
     return summary
 
 
-def _axis_periodicity_features(
-    segment_midpoints: np.ndarray,
-    origin: np.ndarray,
-    axis: np.ndarray,
-) -> dict[str, float]:
-    if len(segment_midpoints) < 4:
-        return {
-            "betlas_axis_periodicity_score": 0.0,
-            "betlas_angular_fft_k3_8_max": 0.0,
-            "betlas_angular_fft_k3_8_best_k": 0.0,
-            **{f"betlas_angular_fft_k{k}": 0.0 for k in range(3, 9)},
-        }
-    xy, z, _xyz = project_to_axis(segment_midpoints, origin, axis)
-    angles = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * math.pi)
-    hist, _edges = np.histogram(angles, bins=36, range=(0.0, 2.0 * math.pi))
-    hist = hist.astype(float)
-    hist = (hist - np.mean(hist)) / (np.std(hist) + EPS)
-    fft = np.abs(np.fft.rfft(hist))
-    fft = fft / (np.sum(fft[1:]) + EPS)
-    harmonics: dict[str, float] = {}
-    best_k = 0
-    best_val = 0.0
-    for k in range(3, 9):
-        value = float(fft[k]) if k < len(fft) else 0.0
-        harmonics[f"betlas_angular_fft_k{k}"] = value
-        if value > best_val:
-            best_val = value
-            best_k = k
-
-    order = np.argsort(z)
-    angles_sorted = np.unwrap(angles[order])
-    z_sorted = z[order]
-    if len(np.unique(np.round(z_sorted, 3))) >= 4:
-        coeff = np.polyfit(z_sorted, angles_sorted, deg=1)
-        pred = np.polyval(coeff, z_sorted)
-        ss_res = float(np.sum((angles_sorted - pred) ** 2))
-        ss_tot = float(np.sum((angles_sorted - np.mean(angles_sorted)) ** 2))
-        helical_r2 = max(0.0, 1.0 - ss_res / (ss_tot + EPS))
-    else:
-        helical_r2 = 0.0
-    return {
-        "betlas_axis_periodicity_score": float(0.5 * helical_r2 + 0.5 * best_val),
-        "betlas_angular_fft_k3_8_max": best_val,
-        "betlas_angular_fft_k3_8_best_k": float(best_k),
-        **harmonics,
-    }
-
-
 def _strand_order_features(
     segment_midpoints: np.ndarray,
     geometry: StructureGeometry,
@@ -757,7 +684,7 @@ def _strand_order_features(
     xy, _z, _xyz = project_to_axis(segment_midpoints, origin, axis)
     angles = np.mod(np.arctan2(xy[:, 1], xy[:, 0]), 2.0 * math.pi)
     angular_order = np.argsort(angles)
-    seq_order = np.argsort([segment.start_auth_seq_id for segment in geometry.beta_segments])
+    seq_order = sorted(range(n), key=lambda idx: _element_sequence_key(geometry, geometry.beta_segments[idx]))
     seq_rank = np.empty(n, dtype=int)
     for rank, idx in enumerate(seq_order):
         seq_rank[idx] = rank
@@ -810,6 +737,30 @@ def _alpha_shell_features(
         "betlas_alpha_shell_radial_delta": helix_radius - beta_radius,
         "betlas_helix_beta_radius_ratio": helix_radius / (beta_radius + EPS),
     }
+
+
+def plane_applicability(geometry: StructureGeometry) -> dict[str, Any]:
+    """Check whether both dominant sheet normals are uniquely defined."""
+    ranked = _top_sheet_items(geometry)[0]
+    if len(ranked) < 2:
+        return {"plane_status": "no_pair", "plane_applicable": True}
+    result: dict[str, Any] = {"plane_status": "available", "plane_applicable": True}
+    for position, (sheet, items) in enumerate(ranked[:2], 1):
+        coords = np.concatenate([item.coords for item in items])
+        eigenvalues = np.linalg.eigvalsh(np.cov(coords.T)) if len(coords) >= 2 else np.zeros(3)
+        threshold = max(1e-12, 1e-10 * max(float(eigenvalues[2]), 0.))
+        valid = len(coords) >= 3 and eigenvalues[1] - eigenvalues[0] > threshold
+        result.update({f"sheet{position}_id": sheet, f"sheet{position}_ca_n": len(coords),
+                       f"sheet{position}_lambda0": float(eigenvalues[0]), f"sheet{position}_lambda1": float(eigenvalues[1]),
+                       f"sheet{position}_lambda2": float(eigenvalues[2]), f"sheet{position}_normal_valid": bool(valid)})
+        if not valid:
+            result.update(plane_status="normal_unavailable", plane_applicable=False)
+    return result
+
+
+def extract_classifier_features(geometry: StructureGeometry) -> dict[str, Any]:
+    """Extract the 136 ordered descriptors and their applicability metadata."""
+    return extract_signature(geometry).features
 
 
 def extract_signature(geometry: StructureGeometry) -> GeometrySignature:
@@ -893,10 +844,35 @@ def extract_signature(geometry: StructureGeometry) -> GeometrySignature:
     features.update(_sheet_order_topology_features(geometry))
     features.update(_contact_graph_features(geometry))
     features.update(_contact_sequence_topology_features(geometry))
-    features.update(_axis_periodicity_features(segment_midpoints, origin, direction))
     features.update(_strand_order_features(segment_midpoints, geometry, origin, direction))
     features.update(_alpha_shell_features(geometry, origin, direction))
-    features.update(_angular_lobe_features(segment_midpoints, origin, direction, features))
+
+    if geometry.secondary_structure_source == "dssp":
+        # Strand IDs are identifiers, not a spatial ordering. A ladder graph can
+        # branch or cycle, so legacy linear-order statistics have no unique value.
+        for name in _sheet_order_topology_features(geometry):
+            features[name] = math.nan
+        features["betlas_sheet_order_status"] = "unavailable_graph_has_no_declared_linear_order"
+        edges = geometry.sheet_connections
+        features["betlas_dssp_ladder_edge_count"] = float(len(edges))
+        features["betlas_parallel_sheet_order_fraction"] = sum(edge[2] == "parallel" for edge in edges) / max(1, len(edges))
+        features["betlas_antiparallel_sheet_order_fraction"] = sum(edge[2] == "anti-parallel" for edge in edges) / max(1, len(edges))
+        features["betlas_secondary_structure_source"] = "dssp"
+        features["betlas_domain_segment_count"] = float(geometry.domain_segment_count)
+        features["betlas_ladder_pairing_status"] = (
+            "partial_clipped_ladders" if "clipped_ladder_pairing_unavailable" in geometry.warnings
+            else "available" if edges else "no_retained_ladders"
+        )
+        if len({residue.chain_id for residue in geometry.residues}) > 1:
+            # Sequence topology across separate chains has no single ordering.
+            for name in features:
+                if name.startswith("betlas_sheet_seq_") or name in {
+                    "betlas_strand_order_displacement_mean", "betlas_strand_order_adjacent_seq_step_median"
+                }:
+                    features[name] = math.nan
+            features["betlas_sequence_order_status"] = "unavailable_across_chains"
+        else:
+            features["betlas_sequence_order_status"] = "polymer_label_order"
 
     if len(segment_midpoints) >= 2:
         xy, _z, _ = project_to_axis(segment_midpoints, origin, direction)
@@ -905,31 +881,27 @@ def extract_signature(geometry: StructureGeometry) -> GeometrySignature:
     else:
         features["betlas_angular_gap_cv"] = 0.0
 
-    informative_slice_count = _nan_to_zero(float(features.get("betlas_axis_best_slice_count", 0.0)))
-    score_eligible = bool(parse_ok and informative_slice_count > 0.0)
-    if score_eligible:
-        features["betlas_score_status"] = "ok"
-    elif parse_ok:
-        features["betlas_score_status"] = "no_informative_slices"
+    plane = plane_applicability(geometry)
+    if not plane["plane_applicable"]:
+        features.update(dict.fromkeys(VALID_PLANE_COLUMNS, math.nan))
+    if not beta_geoms:
+        moment_status = "no_beta_segments"
+        moments = np.full(8, np.nan)
     else:
-        features["betlas_score_status"] = "parse_failed"
-
-    fold_scores: dict[str, float] = {}
-    if score_eligible:
-        fold_scores = grammar_rule_scores(features, strict=True)
-        top_fold = max(fold_scores, key=fold_scores.get) if fold_scores else ""
-        sorted_scores = sorted(fold_scores.values(), reverse=True)
-        margin = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) >= 2 else 0.0
-        features["betlas_top_fold"] = top_fold
-        features["betlas_rule_margin"] = float(margin)
-        features["betlas_fold_scores_json"] = json.dumps(fold_scores, sort_keys=True)
-        for label in FOLD_LABELS:
-            features[f"betlas_rule_score_{label}"] = float(fold_scores.get(label, 0.0))
+        xy, _z, _xyz = project_to_axis(segment_midpoints, origin, direction)
+        radial = np.linalg.norm(xy, axis=1)
+        moment_status = ("too_few_beta_nodes" if len(beta_geoms) < 4 else
+                         "undefined_radial_angle" if (radial <= EPS).any() else "available")
+        moments = circular_moments(np.arctan2(xy[:, 1], xy[:, 0])) if moment_status == "available" else np.full(8, np.nan)
+    features.update(dict(zip(CIRCULAR_MOMENT_COLUMNS, map(float, moments), strict=True)))
+    features.update(moment_status=moment_status, plane_status=plane["plane_status"])
+    features = apply_applicability(features)
+    features = {**{name: features.get(name, math.nan) for name in FEATURE_COLUMNS},
+                **{name: value for name, value in features.items() if name not in FEATURE_COLUMNS}}
 
     return GeometrySignature(
         domain=geometry.domain,
         features=features,
-        fold_scores=fold_scores,
         warnings=geometry.warnings,
     )
 
@@ -942,13 +914,11 @@ def extract_feature_row(domain: DomainCandidate, mmcif_path: Path) -> dict[str, 
         row["betlas_error"] = ""
         return row
     except Exception as exc:
-        row = domain.to_dict()
+        row = {**domain.to_dict(), **dict.fromkeys(FEATURE_COLUMNS, math.nan), "feature_schema": FEATURE_SCHEMA}
         row.update(
             {
                 "betlas_parse_ok": 0,
                 "betlas_error": f"{type(exc).__name__}: {exc}",
-                "betlas_top_fold": "",
-                "betlas_fold_scores_json": "{}",
             }
         )
         return row
@@ -1028,5 +998,5 @@ def assert_no_diagnostic_label_leakage(row: dict[str, Any]) -> None:
     }
     for key in forbidden_targets:
         value = str(row.get(key, ""))
-        if value.startswith(DIAGNOSTIC_PREFIX) or _is_compatibility_column(value):
+        if value.startswith(DIAGNOSTIC_PREFIX):
             raise ValueError(f"label field {key} was populated from diagnostic field {value!r}")

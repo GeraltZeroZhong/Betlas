@@ -40,7 +40,8 @@ class PCAAligner:
         """
         Compute the principal axes of the point cloud.
 
-        For best results, pass only C-alpha coordinates from beta-sheet residues.
+        The stave-counting pipeline supplies C-alpha coordinates from
+        beta-sheet residues.
 
         Args:
             points (np.ndarray): Coordinate array with shape ``(N, 3)``.
@@ -70,10 +71,6 @@ class PCAAligner:
         self.eigenvalues = eig_vals
         self.eigenvalue_gaps = np.diff(eig_vals)
         self.rotation_matrix = self._stabilize_eigenvector_signs(eig_vecs)
-        
-        # Debug helper: variance contribution of each PCA axis.
-        # variance_ratio = eig_vals / np.sum(eig_vals)
-        # print(f"PCA Variance Ratios (X, Y, Z): {variance_ratio}")
 
     def transform(self, points):
         """

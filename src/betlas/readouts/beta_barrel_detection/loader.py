@@ -353,8 +353,35 @@ class ProteinLoader:
             fd, tmp_path = tempfile.mkstemp(suffix=".cif")
             os.close(fd)
             io = MMCIFIO()
-            io.set_structure(self.model)
-            io.save(tmp_path, select=_ProteinOnlySelect())
+            # Atom-only MMCIFIO output lacks the polymer declarations required
+            # by recent DSSP. Preserve source categories and select atom rows
+            # for the chosen coordinate model and recognized protein residues.
+            source_tmp = _decompress_gzip_to_temp_if_needed(self.file_path)
+            try:
+                data = MMCIF2Dict(source_tmp or self.file_path)
+            finally:
+                if source_tmp:
+                    os.remove(source_tmp)
+            accepted = {(str(chain.id), int(residue.id[1]), str(residue.id[2]).strip())
+                        for chain in self.model for residue in chain
+                        if is_aa(residue, standard=False)}
+            count = len(data["_atom_site.id"])
+            models = data.get("_atom_site.pdbx_PDB_model_num", ["1"] * count)
+            insertions = data.get("_atom_site.pdbx_PDB_ins_code", ["?"] * count)
+            wanted_model = str(self.model.serial_num)
+            selected = []
+            for index, (chain, number, insertion, model) in enumerate(zip(
+                data["_atom_site.auth_asym_id"], data["_atom_site.auth_seq_id"],
+                insertions, models, strict=True,
+            )):
+                insertion = "" if insertion in {".", "?"} else insertion.strip()
+                if model == wanted_model and (chain, int(number), insertion) in accepted:
+                    selected.append(index)
+            for key, values in list(data.items()):
+                if key.startswith("_atom_site."):
+                    data[key] = [values[index] for index in selected]
+            io.set_dict(data)
+            io.save(tmp_path)
             return tmp_path
 
         fd, tmp_path = tempfile.mkstemp(suffix=".pdb")
@@ -373,6 +400,9 @@ class ProteinLoader:
         file_type: str = "PDB",
     ) -> dict[tuple[str, tuple[str, int, str]], str]:
         dssp_bin = require_dssp_binary(self.dssp_bin)
+        if file_type == "MMCIF" and self._has_multichar_chain_ids():
+            # Classic DSSP residue records cannot represent these identifiers.
+            return self._run_dssp_mmcif_output(tmp_path, dssp_bin)
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings(

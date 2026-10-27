@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import math
 import os
 import subprocess
 import sys
@@ -84,7 +86,7 @@ def load_results_tsv(
             if not sample_id:
                 continue
             score = _parse_float(row.get(decision_column))
-            if score is None:
+            if score is None or not math.isfinite(score):
                 raise ValueError(f"Missing score for {sample_id!r} in {decision_column}.")
             rows.append(
                 IsItABarrelResult(
@@ -149,6 +151,9 @@ def _invoke_isitabarrel(
     extra_args: Sequence[str],
     timeout: float | None,
 ) -> None:
+    expanded_executable = os.path.expanduser(python_executable)
+    if os.path.dirname(expanded_executable):
+        python_executable = str(Path(expanded_executable).resolve())
     command = [
         python_executable,
         str(script_path),
@@ -164,6 +169,9 @@ def _invoke_isitabarrel(
         text=True,
         timeout=timeout,
     )
+    (work_dir / "command.json").write_text(json.dumps(command, indent=2) + "\n")
+    (work_dir / "stdout.txt").write_text(completed.stdout)
+    (work_dir / "stderr.txt").write_text(completed.stderr)
     if completed.returncode != 0:
         stdout = completed.stdout.strip()
         stderr = completed.stderr.strip()

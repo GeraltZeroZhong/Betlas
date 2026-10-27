@@ -16,11 +16,11 @@ FOLD_LABELS: tuple[str, ...] = (
 
 DIAGNOSTIC_PREFIX = BETLAS_PREFIX
 
-DEFAULT_CATH_DIR = Path("data/external/cath")
-DEFAULT_MMCIF_DIR = Path("data/external/pdb_mmcif")
-DEFAULT_LABELS_CSV = Path("data/processed/betlas_full_labels.csv")
-DEFAULT_FEATURES_CSV = Path("data/processed/betlas_full_features.csv")
-DEFAULT_RUN_DIR = Path("runs/betlas_full_benchmark")
+DEFAULT_CATH_DIR = Path("inputs/cath")
+DEFAULT_MMCIF_DIR = Path("inputs/mmcif")
+DEFAULT_LABELS_CSV = Path("outputs/labels.csv")
+DEFAULT_FEATURES_CSV = Path("outputs/features.csv")
+DEFAULT_RUN_DIR = Path("outputs/benchmark")
 
 CATH_URLS = {
     "all": "https://download.cathdb.info/cath/releases/daily-release/newest/cath-b-newest-all.gz",
